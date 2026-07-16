@@ -408,17 +408,29 @@ def _build_payload_uncached(data_dir):
 
     transactions = list(labor.values()) + list(nonlabor.values())
 
-    # transaction aggregates per project
+    # transaction aggregates per project, split three ways:
+    #   fac       — faculty (PI summer) salary and its fringe
+    #   personnel — all other salaries and fringe
+    #   other     — every non-labor cost (travel, fees, indirect, ...)
+    faculty_people = {t["person"] for t in transactions
+                      if t["kind"] == "labor" and t["person"]
+                      and "faculty" in t["type"].lower()}
     monthly = {}        # project -> {month: net}
-    monthly_fac = {}    # project -> {month: faculty-salary portion}
+    monthly_parts = {}  # project -> {month: {fac, personnel, other}}
     for t in transactions:
         m = month_of(t["date"])
-        if m:
-            bym = monthly.setdefault(t["project"], {})
-            bym[m] = bym.get(m, 0.0) + t["amount"]
-            if t["kind"] == "labor" and "faculty" in t["type"].lower():
-                byf = monthly_fac.setdefault(t["project"], {})
-                byf[m] = byf.get(m, 0.0) + t["amount"]
+        if not m:
+            continue
+        bym = monthly.setdefault(t["project"], {})
+        bym[m] = bym.get(m, 0.0) + t["amount"]
+        parts = monthly_parts.setdefault(t["project"], {}).setdefault(
+            m, {"fac": 0.0, "personnel": 0.0, "other": 0.0})
+        if t["kind"] == "labor":
+            ty = t["type"].lower()
+            is_fac = "faculty" in ty or ("fringe" in ty and t["person"] in faculty_people)
+            parts["fac" if is_fac else "personnel"] += t["amount"]
+        else:
+            parts["other"] += t["amount"]
 
     # project names conventionally end with the PI surname; collect surnames
     # so display names can drop them ("DOE DE-SC0020267 Holmes" -> "DOE DE-SC0020267")
@@ -495,7 +507,8 @@ def _build_payload_uncached(data_dir):
             "categories": cats,
             "totals": totals,
             "monthly": {m: round(v, 2) for m, v in sorted(bym.items())},
-            "monthlyFaculty": {m: round(v, 2) for m, v in sorted(monthly_fac.get(pid, {}).items())},
+            "monthlyParts": {m: {k: round(v, 2) for k, v in parts.items()}
+                             for m, parts in sorted(monthly_parts.get(pid, {}).items())},
             "burn": {
                 "recent": round(recent_burn, 2) if recent_burn is not None else None,
                 "recentMonths": [m for m, _ in recent3],
