@@ -61,16 +61,19 @@ projections to anchor to.
 3. Enter your name in **Project PI / Manager**.
 4. Export the Project Summary table as **CSV** and drop it in `data/`.
 
-### 2. RPT_GMS_007 — Sponsored Project Detail Report — strongly recommended
+### 2. Expenditure detail report — strongly recommended
 
-This is the transaction-level report. It provides **monthly burn rates and
-spending history, everyone paid from each award (with salaries and fringe
-rates that seed the hiring simulator), support splits, and exact F&A
-rates**. Without it the dashboard still works, but falls back to linear
-burn estimates and an empty People section.
+This is the transaction-level report (in Oracle BI Publisher; the report
+number changes from time to time, but the export filename always starts
+with `RPT`). It provides **monthly burn rates and spending history,
+everyone paid from each award (with salaries and fringe rates that seed
+the hiring simulator), support splits, and exact F&A rates**. Without it
+the dashboard still works, but falls back to linear burn estimates and an
+empty People section.
 
-1. Open [RPT_GMS_007](https://fa-ewlq-saasfaprod1.fa.ocs.oraclecloud.com/analytics/saw.dll?bipublisherEntry&Action=open&itemType=.xdo&bipPath=%2FCustom%2FProjects%2FSponsored%20Projects%2FRPT_GMS_007%20-%20Sponsored%20Project%20Detail%20Report.xdo&path=%2Fshared%2FCustom%2FProjects%2FSponsored%20Projects%2FRPT_GMS_007%20-%20Sponsored%20Project%20Detail%20Report.xdo)
-   in Oracle BI Publisher.
+1. Open the [expenditure detail report](https://fa-ewlq-saasfaprod1.fa.ocs.oraclecloud.com/analytics/saw.dll?bipublisherEntry&Action=open&itemType=.xdo&bipPath=%2FCustom%2FProjects%2FSponsored%20Projects%2FRPT_GMS_007%20-%20Sponsored%20Project%20Detail%20Report.xdo&path=%2Fshared%2FCustom%2FProjects%2FSponsored%20Projects%2FRPT_GMS_007%20-%20Sponsored%20Project%20Detail%20Report.xdo)
+   in Oracle BI Publisher. (If the link goes stale, search BI Publisher
+   for the current "Sponsored Project Detail Report".)
 2. Add **all of your project IDs** (the `SPN…` numbers from the PI
    Dashboard export) and select the **widest time period available** —
    more history means better burn rates and seasonality detection.
@@ -78,12 +81,12 @@ burn estimates and an empty People section.
 
 Notes:
 
-* Multiple RPT files are fine (e.g., one per account, or overlapping date
+* Multiple detail-report files are fine (e.g., one per account, or overlapping date
   ranges) — they merge and de-duplicate automatically. For PI Dashboard
   files, the newest file wins per project.
 * Re-export both whenever you want fresh numbers (monthly is plenty) and
   click **Reload data** in the page header. Old files can stay in `data/`.
-* Don't worry that the RPT export is huge (hundreds of MB) — the reporting
+* Don't worry that the detail export is huge (hundreds of MB) — the reporting
   tool pads it heavily; parsing is a few seconds, once, per new file.
 
 ## Notes on the numbers
@@ -113,3 +116,20 @@ Notes:
 Point them at this repo. They clone it, export their own two reports into
 `data/`, and run the same command. Nothing about your data travels with the
 repo.
+
+## Adapting this for another institution
+
+Faculty elsewhere won't have these exact exports, but they can build the
+same product tailored to whatever their institution exports. This repo
+ships a skill for exactly that:
+[`.claude/skills/build-pi-budget-dashboard/SKILL.md`](.claude/skills/build-pi-budget-dashboard/SKILL.md)
+— it walks an AI coding assistant (e.g. Claude Code) through the process:
+inventorying what the institution can export, inspecting the files'
+quirks, learning the local rules (rebudgeting allowances, fringe rates,
+summer salary, F&A), and building/verifying each feature, with this
+codebase as the reference implementation.
+
+To use it: clone this repo and open it in Claude Code (the skill loads
+automatically), or copy the skill folder into your own project's
+`.claude/skills/` — then ask for a dashboard built from your sample
+exports.

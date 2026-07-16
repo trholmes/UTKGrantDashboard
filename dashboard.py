@@ -104,6 +104,11 @@ def classify_csv(path):
         return "detail"
     if "Project Number" in header and "Expenditure Category" in header:
         return "pi_dashboard"
+    # Expenditure detail exports keep the RPT filename prefix even when the
+    # report number/name changes; accept any RPT* csv that looks the part.
+    if path.name.upper().startswith("RPT") and any(
+            marker in header for marker in ("PROJ_NUMBER", "L_EXP", "NL_EXP")):
+        return "detail"
     return None
 
 

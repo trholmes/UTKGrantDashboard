@@ -315,7 +315,7 @@ function renderPortfolio() {
         'Burn ≈ ', el('b', {}, fmt$(burn) + '/mo'), ` (${src})${extra} · ${runTxt}`));
     } else if (active && !hasMonthly) {
       card.append(el('div', { class: 'burn-line' },
-        'No transaction detail loaded for this award — add an RPT_GMS_007 export for real burn rates.'));
+        'No transaction detail loaded for this award — add an expenditure detail export (RPT…) for real burn rates.'));
     }
 
     // balance history (reconstructed from transactions) with the burn trend
