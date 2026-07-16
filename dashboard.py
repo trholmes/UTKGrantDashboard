@@ -347,7 +347,28 @@ def short_name(full_name, pi_names):
     return name.strip() or full_name
 
 
+# Large detail exports (the cartesian product can reach hundreds of MB) take
+# a few seconds to parse, so cache the parsed payload keyed on the CSV files'
+# (path, mtime, size) — a reload only re-parses when a file actually changes.
+_payload_cache = {"key": None, "payload": None}
+
+
 def build_payload(data_dir):
+    key = tuple(sorted(
+        (str(p), p.stat().st_mtime, p.stat().st_size)
+        for p in Path(data_dir).glob("*.csv")
+    )) + (date.today().isoformat(),)
+    if _payload_cache["key"] == key:
+        payload = dict(_payload_cache["payload"])
+        payload["config"] = load_config(data_dir)  # config always fresh
+        return payload
+    payload = _build_payload_uncached(data_dir)
+    _payload_cache["key"] = key
+    _payload_cache["payload"] = payload
+    return dict(payload, config=load_config(data_dir))
+
+
+def _build_payload_uncached(data_dir):
     today_iso = date.today().isoformat()
     this_month = today_iso[:7]
 
@@ -480,7 +501,6 @@ def build_payload(data_dir):
         "projects": projects,
         "people": people,
         "flags": flags,
-        "config": load_config(data_dir),
     }
 
 
