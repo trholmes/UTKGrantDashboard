@@ -573,13 +573,7 @@ function renderPortfolio() {
           },
         }),
         el('span', { class: 'sep' }, 'new end'),
-        el('input', {
-          type: 'month', value: ov.expectedEnd ?? '',
-          oninput: (e) => {
-            ov.expectedEnd = e.target.value || null;
-            save(); renderSummary();
-          },
-        })));
+        monthInput(ov.expectedEnd, (v) => { ov.expectedEnd = v; save(); renderSummary(); })));
     }
 
     grid.append(card);
@@ -660,6 +654,27 @@ function barSpark(monthlyParts, domain, maxV) {
 
 /* ----- people ----- */
 
+function monthInput(value, onSet, placeholder) {
+  // text input that accepts YYYY-MM (placeholder shows the format, which
+  // native month inputs can't do in Safari); snaps to the saved value on blur
+  let saved = value || '';
+  const input = el('input', {
+    type: 'text', class: 'month-in', placeholder: placeholder || 'YYYY-MM',
+    maxlength: 7, value: saved,
+    oninput: (e) => {
+      const v = e.target.value.trim();
+      if (v === '') { saved = ''; onSet(null); return; }
+      const m = v.match(/^(\d{4})-(\d{1,2})$/);
+      if (m && +m[2] >= 1 && +m[2] <= 12) {
+        saved = `${m[1]}-${String(+m[2]).padStart(2, '0')}`;
+        onSet(saved);
+      }
+    },
+    onchange: (e) => { e.target.value = saved; },
+  });
+  return input;
+}
+
 function supportLabel(support) {
   // "Jun 2026: DOE DE-SC0023122 50% · Princeton SUB0000919 50%"
   if (!support || !support.shares || !support.shares.length) return '—';
@@ -697,29 +712,34 @@ function renderPeople() {
           type: 'text', value: person.name, title: person.name,
           oninput: (e) => { person.name = e.target.value; save(); renderSim(); },
         }),
-        det && det.facultySalary ? el('span', {
-          class: 'dot', style: 'background:var(--series-5);margin-left:5px',
-          title: 'faculty summer salary — only charged '
-            + (det.paidMonthNums || []).map((n) => MONTH_NAMES[n - 1]).join('/'),
-        }) : null,
+        el('span', {
+          class: 'dot',
+          style: `background:var(--series-${det && det.facultySalary ? 5 : 1});margin-left:5px`,
+          title: det && det.facultySalary
+            ? 'faculty summer salary — only charged '
+              + (det.paidMonthNums || []).map((n) => MONTH_NAMES[n - 1]).join('/')
+            : 'year-round personnel',
+        }),
         person.source !== 'payroll' ? el('span', { class: 'badge', style: 'margin-left:5px' }, 'manual') : null),
       el('td', { class: 'num' }, numIn('monthlySalary', 0, 50)),
       el('td', { class: 'num' }, numIn('fringeRate', 100, 0.1)),
       el('td', { class: 'num' }, numIn('annualFees', 0, 100)),
-      el('td', {}, el('input', {
-        type: 'month', value: person.endMonth || '',
-        title: 'expected graduation / rotation off your funding — the summary projection drops them after this month',
-        oninput: (e) => { person.endMonth = e.target.value || null; save(); renderSummary(); },
-      })),
+      el('td', {}, (() => {
+        const inp = monthInput(person.endMonth,
+          (v) => { person.endMonth = v; save(); renderSummary(); });
+        inp.title = 'expected graduation / rotation off your funding — the summary projection drops them after this month';
+        return inp;
+      })()),
       el('td', { class: 'paychange' },
-        el('input', {
-          type: 'month', value: person.payChangeMonth || '',
-          title: 'month a scheduled pay change takes effect',
-          oninput: (e) => { person.payChangeMonth = e.target.value || null; save(); renderSummary(); },
-        }),
+        (() => {
+          const inp = monthInput(person.payChangeMonth,
+            (v) => { person.payChangeMonth = v; save(); renderSummary(); });
+          inp.title = 'month a scheduled pay change takes effect';
+          return inp;
+        })(),
         ' → $',
         el('input', {
-          type: 'number', step: 50, placeholder: 'new /mo',
+          type: 'number', step: 50, placeholder: 'new /mo', class: 'newpay',
           value: person.payChangeSalary ?? '',
           title: 'new monthly salary from that month on',
           oninput: (e) => {
