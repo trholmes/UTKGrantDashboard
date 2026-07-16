@@ -126,6 +126,7 @@ function save() {
 function renderAll() {
   renderStatus();
   renderFlags();
+  renderSummary();
   renderPortfolio();
   renderPeople();
   renderAssignments();
@@ -166,6 +167,128 @@ function renderFlags() {
     box.append(el('div', { class: 'flag-empty' },
       `${hidden} note-level flag${hidden === 1 ? '' : 's'} hidden.`));
   }
+}
+
+/* ----- portfolio summary ----- */
+
+function renderSummary() {
+  const box = $('#summary');
+  box.replaceChildren();
+  const curMonth = DATA.today.slice(0, 7);
+  const active = DATA.projects.filter((p) =>
+    p.inDashboard && p.status.toLowerCase() === 'active'
+    && p.end && p.end.slice(0, 7) >= curMonth);
+  if (!active.length) return;
+
+  const totBudget = active.reduce((a, p) => a + p.totals.budget, 0);
+  const totSpent = active.reduce((a, p) => a + p.totals.spent, 0);
+  const available = active.reduce((a, p) => a + p.totals.remaining - p.totals.committed, 0);
+
+  // current team = people with a salary in the last 2 months of detail data
+  const team = [];
+  for (const person of CFG.people) {
+    const det = DATA.people.find((d) => d.name === person.name);
+    if (det && det.lastPaid && monthDiff(det.lastPaid, curMonth) <= 2) {
+      team.push({ person, det });
+    }
+  }
+  // salary + fringe only: student fees and F&A already flow through the
+  // "other spending" trend below (they are non-labor lines in the history),
+  // so adding them here would double-count them
+  const personnelFor = (m) => {
+    const mm = +m.slice(5, 7);
+    let sum = 0;
+    for (const { person, det } of team) {
+      const loaded = (person.monthlySalary || 0) * (1 + (person.fringeRate || 0));
+      if (!det.facultySalary || (det.paidMonthNums || []).includes(mm)) sum += loaded;
+    }
+    return sum;
+  };
+
+  // non-personnel spending trend: 12-month average of the "other" component
+  // (projects without transaction detail contribute their whole burn here)
+  let otherTrend = 0;
+  for (const p of active) {
+    const parts = p.monthlyParts || {};
+    const keys = Object.keys(parts).filter((m) => m < curMonth).sort();
+    if (keys.length) {
+      const window = [];
+      for (let i = 0; i < 12; i++) {
+        const m = monthAdd(keys[keys.length - 1], -i);
+        if (m >= keys[0]) window.push(m);
+      }
+      otherTrend += window.reduce((a, m) => a + ((parts[m] || {}).other || 0), 0) / window.length;
+    } else {
+      otherTrend += p.burn.avg12 ?? p.burn.linear ?? 0;
+    }
+  }
+
+  // month-by-month projection: spend from the soonest-ending award first;
+  // an award's leftover balance disappears when it ends
+  const pools = active
+    .map((p) => ({ end: p.end.slice(0, 7), bal: Math.max(0, p.totals.remaining - p.totals.committed) }))
+    .sort((a, b) => (a.end < b.end ? -1 : 1));
+  const horizon = pools[pools.length - 1].end;
+  const months = monthRange(monthAdd(curMonth, 1), horizon);
+  const series = [];
+  let runsOut = null, expired = 0, unmet = 0;
+  for (const m of months) {
+    for (const pool of pools) {
+      if (pool.end < m && pool.bal > 0) { expired += pool.bal; pool.bal = 0; }
+    }
+    let need = personnelFor(m) + otherTrend;
+    for (const pool of pools) {
+      if (pool.end < m || pool.bal <= 0) continue;
+      const take = Math.min(pool.bal, need);
+      pool.bal -= take; need -= take;
+      if (need <= 0) break;
+    }
+    if (need > 0) {
+      unmet += need;
+      if (runsOut === null) runsOut = m;
+    }
+    series.push(pools.reduce((a, pool) => a + (pool.end >= m ? pool.bal : 0), 0) - unmet);
+  }
+
+  // representative monthly costs: a non-summer month and the summer peak
+  const monthlyByMm = Array.from({ length: 12 }, (_, i) =>
+    personnelFor(`2030-${String(i + 1).padStart(2, '0')}`));
+  const baseMonthly = Math.min(...monthlyByMm);
+  const peakMonthly = Math.max(...monthlyByMm);
+
+  const fundedThrough = runsOut === null ? horizon : monthAdd(runsOut, -1);
+  const runwayMonths = monthDiff(curMonth, fundedThrough);
+
+  const card = el('div', { class: 'sim-card' });
+  const stat = (label, value, note, cls) => el('div', { class: 'stat' },
+    el('div', { class: 'stat-label' }, label),
+    el('div', { class: 'stat-value' + (cls ? ' ' + cls : '') }, value),
+    note ? el('div', { class: 'stat-note' }, note) : null);
+
+  card.append(el('div', { class: 'sim-stats' },
+    stat('Active awards', String(active.length),
+      `${fmt$(totBudget)} total · ${fmt$(totSpent)} spent`),
+    stat('Available now', fmt$(available),
+      expired > 0 ? `${fmt$(expired)} of it expires unspent at this pace` : 'across all active awards'),
+    stat('Current team', fmt$(baseMonthly) + '/mo',
+      (peakMonthly > baseMonthly + 1 ? `${fmt$(peakMonthly)}/mo in summer · ` : '')
+        + `${team.length} people (salary+fringe) + ${fmt$(otherTrend)}/mo other (F&A, fees, travel, …)`),
+    stat('Funded through', fmtMonth(fundedThrough),
+      runsOut === null
+        ? 'to the end of your last award'
+        : `bring in new money by then (${fmt$(unmet)} short through ${fmtMonth(horizon)})`,
+      runwayMonths >= 12 ? 'ok' : 'bad')));
+
+  card.append(el('div', { class: 'spark-title', style: 'margin-top:6px' },
+    'Projected available funds — current team + other-spending trend, balances expire as awards end'));
+  card.append(lineChart(months, [
+    { name: 'available funds', values: series, endLabel: true },
+  ], { W: 960, H: 170, padL: 56 }));
+  card.append(el('div', { class: 'burn-line' }, 'Awards end: ',
+    active.slice().sort((a, b) => (a.end < b.end ? -1 : 1))
+      .map((p) => `${p.shortName} ${fmtMonth(p.end.slice(0, 7))}`).join(' · '),
+    '. Hypothetical simulator assignments are not included here.'));
+  box.append(card);
 }
 
 /* ----- portfolio ----- */
@@ -461,7 +584,7 @@ function renderPeople() {
       oninput: (e) => {
         const v = parseFloat(e.target.value);
         person[key] = isNaN(v) ? 0 : (scale ? v / scale : v);
-        save(); renderSim();
+        save(); renderSim(); renderSummary();
       },
     });
     tbl.append(el('tr', {},
@@ -485,7 +608,7 @@ function renderPeople() {
         onclick: () => {
           CFG.people = CFG.people.filter((p) => p !== person);
           CFG.assignments = CFG.assignments.filter((a) => a.personId !== person.id);
-          save(); renderPeople(); renderAssignments(); renderSim();
+          save(); renderPeople(); renderAssignments(); renderSim(); renderSummary();
         },
       }, 'Remove'))));
   }
