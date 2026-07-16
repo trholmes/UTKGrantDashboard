@@ -675,10 +675,10 @@ function renderPeople() {
   const box = $('#people');
   const tbl = el('table', { class: 'people' },
     el('tr', {},
-      el('th', {}, 'Name'), el('th', { class: 'num' }, 'Monthly salary ($)'),
-      el('th', { class: 'num' }, 'Fringe (%)'), el('th', { class: 'num' }, 'Fees+tuition ($/yr)'),
+      el('th', {}, 'Name'), el('th', { class: 'num' }, 'Salary ($/mo)'),
+      el('th', { class: 'num' }, 'Fringe (%)'), el('th', { class: 'num' }, 'Fees ($/yr)'),
       el('th', {}, 'Expected end'), el('th', {}, 'Pay change'),
-      el('th', {}, 'Current support'), el('th', {}, 'Source'), el('th', {})));
+      el('th', {}, 'Current support'), el('th', {})));
 
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
@@ -692,10 +692,17 @@ function renderPeople() {
       },
     });
     tbl.append(el('tr', {},
-      el('td', {}, el('input', {
-        type: 'text', value: person.name,
-        oninput: (e) => { person.name = e.target.value; save(); renderSim(); },
-      })),
+      el('td', { class: 'name-cell' },
+        el('input', {
+          type: 'text', value: person.name, title: person.name,
+          oninput: (e) => { person.name = e.target.value; save(); renderSim(); },
+        }),
+        det && det.facultySalary ? el('span', {
+          class: 'dot', style: 'background:var(--series-5);margin-left:5px',
+          title: 'faculty summer salary — only charged '
+            + (det.paidMonthNums || []).map((n) => MONTH_NAMES[n - 1]).join('/'),
+        }) : null,
+        person.source !== 'payroll' ? el('span', { class: 'badge', style: 'margin-left:5px' }, 'manual') : null),
       el('td', { class: 'num' }, numIn('monthlySalary', 0, 50)),
       el('td', { class: 'num' }, numIn('fringeRate', 100, 0.1)),
       el('td', { class: 'num' }, numIn('annualFees', 0, 100)),
@@ -721,22 +728,18 @@ function renderPeople() {
             save(); renderSummary();
           },
         })),
-      el('td', { class: 'muted-cell' }, supportLabel(det && det.support)),
-      el('td', {},
-        el('span', { class: 'badge' }, person.source === 'payroll' ? 'from payroll' : 'manual'),
-        det && det.facultySalary ? el('span', {
-          class: 'badge', style: 'color:var(--series-5);border-color:var(--series-5)',
-          title: 'faculty salary — only charged in the months listed, not year-round',
-        }, ' summer salary · ' + (det.paidMonthNums || []).map((n) => MONTH_NAMES[n - 1]).join('/')) : null,
-        det && det.lastPaid ? el('span', { class: 'badge', title: 'most recent salary month in the detail export' }, ' last paid ' + fmtMonth(det.lastPaid)) : null),
+      el('td', {
+        class: 'muted-cell support-cell',
+        title: supportLabel(det && det.support),
+      }, supportLabel(det && det.support)),
       el('td', {}, el('button', {
-        class: 'btn danger',
+        class: 'btn danger btn-x', title: 'Remove person',
         onclick: () => {
           CFG.people = CFG.people.filter((p) => p !== person);
           CFG.assignments = CFG.assignments.filter((a) => a.personId !== person.id);
           save(); renderPeople(); renderAssignments(); renderSim(); renderSummary();
         },
-      }, 'Remove'))));
+      }, '✕'))));
   }
   box.replaceChildren(el('div', { class: 'people-wrap' }, tbl));
 }

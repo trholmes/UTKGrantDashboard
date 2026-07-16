@@ -152,11 +152,16 @@ table.people th, table.people td { padding: 7px 10px; text-align: left; border-t
 table.people th { color: var(--muted); font-size: 11.5px; font-weight: 500; border-top: none; }
 table.people td.num, table.people th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .people-wrap { overflow-x: auto; }
-table.people { min-width: 1080px; }
-table.people input[type="text"] { width: 130px; }
-table.people input[type="number"] { width: 80px; text-align: right; }
-table.people input[type="month"] { width: 125px; }
+table.people { min-width: 960px; }
+table.people th, table.people td { padding: 4px 8px; white-space: nowrap; }
+table.people input { padding: 2px 5px; font-size: 12.5px; }
+table.people input[type="text"] { width: 105px; }
+table.people input[type="number"] { width: 68px; text-align: right; }
+table.people input[type="month"] { width: 112px; }
 td.paychange { white-space: nowrap; font-size: 12px; color: var(--muted); }
+td.name-cell { white-space: nowrap; }
+td.support-cell { max-width: 215px; overflow: hidden; text-overflow: ellipsis; }
+.btn-x { padding: 2px 8px; }
 input, select {
   font: inherit; font-size: 13px; color: var(--ink);
   background: var(--page); border: 1px solid var(--baseline);
