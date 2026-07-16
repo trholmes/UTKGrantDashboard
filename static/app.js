@@ -184,22 +184,33 @@ function renderSummary() {
   const totSpent = active.reduce((a, p) => a + p.totals.spent, 0);
   const available = active.reduce((a, p) => a + p.totals.remaining - p.totals.committed, 0);
 
-  // current team = people with a salary in the last 2 months of detail data
+  // current team = people with a salary in the last 2 months of detail data,
+  // minus anyone whose expected end date has already passed
   const team = [];
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
+    if (person.endMonth && person.endMonth < curMonth) continue;
     if (det && det.lastPaid && monthDiff(det.lastPaid, curMonth) <= 2) {
       team.push({ person, det });
     }
   }
   // salary + fringe only: student fees and F&A already flow through the
   // "other spending" trend below (they are non-labor lines in the history),
-  // so adding them here would double-count them
+  // so adding them here would double-count them. Expected end dates and
+  // scheduled pay changes from the People table apply month by month.
+  const salaryAt = (person, m) => {
+    if (person.payChangeMonth && person.payChangeSalary != null
+        && m >= person.payChangeMonth) {
+      return person.payChangeSalary;
+    }
+    return person.monthlySalary || 0;
+  };
   const personnelFor = (m) => {
     const mm = +m.slice(5, 7);
     let sum = 0;
     for (const { person, det } of team) {
-      const loaded = (person.monthlySalary || 0) * (1 + (person.fringeRate || 0));
+      if (person.endMonth && m > person.endMonth) continue;
+      const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0));
       if (!det.facultySalary || (det.paidMonthNums || []).includes(mm)) sum += loaded;
     }
     return sum;
@@ -224,9 +235,19 @@ function renderSummary() {
   }
 
   // month-by-month projection: spend from the soonest-ending award first;
-  // an award's leftover balance disappears when it ends
+  // an award's leftover balance disappears when it ends. Manually entered
+  // "expected additional funding" (with its new end date) joins the pool —
+  // an extended end also lets the existing balance carry forward.
+  let extraTotal = 0;
   const pools = active
-    .map((p) => ({ end: p.end.slice(0, 7), bal: Math.max(0, p.totals.remaining - p.totals.committed) }))
+    .map((p) => {
+      const ov = CFG.overrides[p.id] || {};
+      const extra = ov.expectedExtra || 0;
+      extraTotal += extra;
+      let end = p.end.slice(0, 7);
+      if (ov.expectedEnd && ov.expectedEnd > end) end = ov.expectedEnd;
+      return { end, bal: Math.max(0, p.totals.remaining - p.totals.committed) + extra };
+    })
     .sort((a, b) => (a.end < b.end ? -1 : 1));
   const horizon = pools[pools.length - 1].end;
   const months = monthRange(monthAdd(curMonth, 1), horizon);
@@ -272,12 +293,15 @@ function renderSummary() {
     stat('Active awards', String(active.length),
       `${fmt$(totBudget)} total · ${fmt$(totSpent)} spent`),
     stat('Available now', fmt$(available),
-      expired > 0 ? `${fmt$(expired)} of it expires unspent at this pace` : 'across all active awards'),
+      (extraTotal > 0 ? `+ ${fmt$(extraTotal)} expected (entered manually) · ` : '')
+        + (expired > 0 ? `${fmt$(expired)} expires unspent at this pace` : 'across all active awards')),
     stat('Current team', fmt$(baseMonthly) + '/mo',
       `${yearRound.length} people year-round, salary+fringe`
         + (summerFolk.length
           ? ` · ${fmt$(peakMonthly)}/mo in ${summerMonths} (${summerFolk.map((t) => t.person.name).join(', ')} summer salary)`
-          : '')),
+          : '')
+        + (team.some((t) => t.person.endMonth || t.person.payChangeMonth)
+          ? ' · scheduled departures/pay changes applied' : '')),
     stat('Other spending', fmt$(otherTrend) + '/mo',
       '12-mo trend: F&A, fees, travel, supplies, …'),
     stat('Funded through', fmtMonth(fundedThrough),
@@ -527,6 +551,31 @@ function renderPortfolio() {
       }
     }
 
+    // manually entered future funding (persists in config.json; feeds the
+    // portfolio summary's funded-through projection)
+    if (active) {
+      const ov = CFG.overrides[p.id] || (CFG.overrides[p.id] = {});
+      card.append(el('div', { class: 'baseline-ctl' },
+        'Expected new funding: $',
+        el('input', {
+          type: 'number', step: 1000, min: 0, placeholder: '0',
+          value: ov.expectedExtra ?? '',
+          oninput: (e) => {
+            const v = parseFloat(e.target.value);
+            ov.expectedExtra = isNaN(v) || v <= 0 ? null : v;
+            save(); renderSummary();
+          },
+        }),
+        el('span', { class: 'sep' }, 'new end'),
+        el('input', {
+          type: 'month', value: ov.expectedEnd ?? '',
+          oninput: (e) => {
+            ov.expectedEnd = e.target.value || null;
+            save(); renderSummary();
+          },
+        })));
+    }
+
     grid.append(card);
   }
 }
@@ -622,6 +671,7 @@ function renderPeople() {
     el('tr', {},
       el('th', {}, 'Name'), el('th', { class: 'num' }, 'Monthly salary ($)'),
       el('th', { class: 'num' }, 'Fringe (%)'), el('th', { class: 'num' }, 'Fees+tuition ($/yr)'),
+      el('th', {}, 'Expected end'), el('th', {}, 'Pay change'),
       el('th', {}, 'Current support'), el('th', {}, 'Source'), el('th', {})));
 
   for (const person of CFG.people) {
@@ -643,6 +693,28 @@ function renderPeople() {
       el('td', { class: 'num' }, numIn('monthlySalary', 0, 50)),
       el('td', { class: 'num' }, numIn('fringeRate', 100, 0.1)),
       el('td', { class: 'num' }, numIn('annualFees', 0, 100)),
+      el('td', {}, el('input', {
+        type: 'month', value: person.endMonth || '',
+        title: 'expected graduation / rotation off your funding — the summary projection drops them after this month',
+        oninput: (e) => { person.endMonth = e.target.value || null; save(); renderSummary(); },
+      })),
+      el('td', { class: 'paychange' },
+        el('input', {
+          type: 'month', value: person.payChangeMonth || '',
+          title: 'month a scheduled pay change takes effect',
+          oninput: (e) => { person.payChangeMonth = e.target.value || null; save(); renderSummary(); },
+        }),
+        ' → $',
+        el('input', {
+          type: 'number', step: 50, placeholder: 'new /mo',
+          value: person.payChangeSalary ?? '',
+          title: 'new monthly salary from that month on',
+          oninput: (e) => {
+            const v = parseFloat(e.target.value);
+            person.payChangeSalary = isNaN(v) ? null : v;
+            save(); renderSummary();
+          },
+        })),
       el('td', { class: 'muted-cell' }, supportLabel(det && det.support)),
       el('td', {},
         el('span', { class: 'badge' }, person.source === 'payroll' ? 'from payroll' : 'manual'),
@@ -660,7 +732,7 @@ function renderPeople() {
         },
       }, 'Remove'))));
   }
-  box.replaceChildren(tbl);
+  box.replaceChildren(el('div', { class: 'people-wrap' }, tbl));
 }
 
 /* ----- simulator ----- */

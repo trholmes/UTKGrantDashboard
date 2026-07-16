@@ -112,7 +112,13 @@ Notes:
   F&A × (salary + fringe)`. Student fees/tuition are excluded from the F&A
   base (MTDC) and only charged if you check the box. The F&A rate comes
   from the detail export and is editable per award.
-* Scenario edits (people, assignments, overrides) save to
+* You can layer in things the reporting system doesn't know yet, and they
+  feed the portfolio summary's funded-through projection: **expected new
+  funding** per award (on its card, with the expected new end date —
+  existing balance carries to the new end), an **expected end date** per
+  person (graduation / rotating off your funding), and a scheduled **pay
+  change** per person ("from month X, salary becomes $Y").
+* Scenario edits (people, assignments, expectations, overrides) save to
   `data/config.json` — local and git-ignored, like everything else in
   `data/`.
 
