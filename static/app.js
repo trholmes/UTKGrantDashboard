@@ -30,10 +30,10 @@ const fmtUSD = new Intl.NumberFormat('en-US',
   { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const fmt$ = (v) => fmtUSD.format(Math.round(v));
 const fmtK = (v) => {
-  const a = Math.abs(v);
-  if (a >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
-  if (a >= 1000) return '$' + Math.round(v / 1000) + 'k';
-  return '$' + Math.round(v);
+  const a = Math.abs(v), sign = v < 0 ? '-' : '';
+  if (a >= 1e6) return sign + '$' + (a / 1e6).toFixed(1) + 'M';
+  if (a >= 1000) return sign + '$' + Math.round(a / 1000) + 'k';
+  return sign + '$' + Math.round(a);
 };
 const fmtPct = (v) => (v * 100).toFixed(0) + '%';
 
@@ -184,6 +184,19 @@ function renderPortfolio() {
   const projects = DATA.projects.filter(
     (p) => p.inDashboard && (showClosed || p.status.toLowerCase() === 'active'));
 
+  // shared axes for all sparklines: same month range and same $ scale,
+  // so the little plots are comparable across awards
+  const monthSet = new Set();
+  for (const p of projects) Object.keys(p.monthly || {}).forEach((m) => monthSet.add(m));
+  let sparkDomain = [...monthSet].sort();
+  if (sparkDomain.length) {
+    sparkDomain = monthRange(sparkDomain[0], sparkDomain[sparkDomain.length - 1]).slice(-24);
+  }
+  let sparkMax = 1;
+  for (const p of projects) {
+    for (const m of sparkDomain) sparkMax = Math.max(sparkMax, Math.abs((p.monthly || {})[m] || 0));
+  }
+
   for (const p of projects) {
     const tf = timeFrac(p);
     const sf = p.totals.budget > 0 ? p.totals.spent / p.totals.budget : null;
@@ -227,72 +240,114 @@ function renderPortfolio() {
     }
     card.append(tbl);
 
-    // monthly spending sparkline from the detail export
-    const months = Object.keys(p.monthly || {});
-    if (months.length) {
+    // monthly spending sparkline (shared axes across all cards)
+    const hasMonthly = Object.keys(p.monthly || {}).length > 0;
+    if (hasMonthly && sparkDomain.length) {
+      const hasFac = sparkDomain.some((m) => ((p.monthlyFaculty || {})[m] || 0) > 0);
       const block = el('div', { class: 'spark-block' },
         el('div', { class: 'spark-title' }, 'Monthly spend (detail export)'));
-      block.append(barSpark(p.monthly));
+      block.append(barSpark(p.monthly, p.monthlyFaculty || {}, sparkDomain, sparkMax));
+      if (hasFac) {
+        block.append(el('div', { class: 'mini-legend' },
+          el('span', { class: 'key' }, el('span', { class: 'dot', style: 'background:var(--series-5)' }), 'PI summer salary'),
+          el('span', { class: 'key' }, el('span', { class: 'dot', style: 'background:var(--series-1)' }), 'all other spending')));
+      }
       card.append(block);
     }
 
     // burn / runway line
-    const burn = p.burn.recent ?? p.burn.linear;
+    const burn = p.burn.avg12 ?? p.burn.recent ?? p.burn.linear;
     if (active && burn && burn > 0) {
-      const src = p.burn.recent != null
-        ? `avg of ${p.burn.recentMonths.map(fmtMonth).join(', ')}`
+      const src = p.burn.avg12 != null ? '12-mo avg'
+        : p.burn.recent != null ? `avg of ${p.burn.recentMonths.map(fmtMonth).join(', ')}`
         : 'linear average over the award';
       const runway = p.totals.remaining / burn;
       const monthsLeft = p.end ? monthDiff(DATA.today.slice(0, 7), p.end.slice(0, 7)) : null;
       let runTxt = `runway ≈ ${runway.toFixed(0)} mo`;
       if (monthsLeft !== null) runTxt += ` (award has ${monthsLeft} mo left)`;
+      const extra = (p.burn.avg12 != null && p.burn.recent != null)
+        ? ` · last 3 mo ${fmt$(p.burn.recent)}/mo` : '';
       card.append(el('div', { class: 'burn-line' },
-        'Burn ≈ ', el('b', {}, fmt$(burn) + '/mo'), ` (${src}) · ${runTxt}`));
-    } else if (active && !months.length) {
+        'Burn ≈ ', el('b', {}, fmt$(burn) + '/mo'), ` (${src})${extra} · ${runTxt}`));
+    } else if (active && !hasMonthly) {
       card.append(el('div', { class: 'burn-line' },
         'No transaction detail loaded for this award — add an RPT_GMS_007 export for real burn rates.'));
+    }
+
+    // projection of current spending to the end of the award
+    if (active && burn && burn > 0 && p.end) {
+      const curMonth = DATA.today.slice(0, 7);
+      const endMonth = p.end.slice(0, 7);
+      if (endMonth > curMonth) {
+        const projMonths = monthRange(monthAdd(curMonth, 1), endMonth);
+        let bal = p.totals.remaining - p.totals.committed;
+        const values = projMonths.map(() => (bal -= burn));
+        const block = el('div', { class: 'spark-block' },
+          el('div', { class: 'spark-title' }, `Projected balance at current burn (${fmt$(burn)}/mo)`));
+        block.append(lineChart(projMonths, [{ name: 'projected balance', values, endLabel: true }],
+          { W: 340, H: 110, padL: 46 }));
+        card.append(block);
+      }
     }
 
     grid.append(card);
   }
 }
 
-function barSpark(monthly) {
-  const keys = Object.keys(monthly).sort().slice(-18);
-  const vals = keys.map((k) => monthly[k]);
+function barSpark(monthly, monthlyFac, domain, maxV) {
+  // domain and maxV are shared across all cards so the sparklines compare.
   const W = 340, H = 48, pad = 2;
-  const maxV = Math.max(1, ...vals.map((v) => Math.abs(v)));
+  const NS = 'http://www.w3.org/2000/svg';
+  const vals = domain.map((k) => monthly[k] || 0);
   const zero = vals.some((v) => v < 0) ? H * 0.7 : H;
-  const bw = Math.max(2, (W - pad * 2) / keys.length - 2);
+  const slot = (W - pad * 2) / domain.length;
+  const bw = Math.max(2, slot - 2);
 
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('viewBox', `0 0 ${W} ${H + 14}`);
   svg.setAttribute('width', '100%');
   svg.style.display = 'block';
 
-  keys.forEach((k, i) => {
-    const v = monthly[k];
+  const rect = (x, y, w, h, fill) => {
+    const r = document.createElementNS(NS, 'rect');
+    r.setAttribute('x', x); r.setAttribute('y', y);
+    r.setAttribute('width', w); r.setAttribute('height', h);
+    r.setAttribute('rx', 1.5);
+    r.setAttribute('fill', fill);
+    return r;
+  };
+
+  domain.forEach((k, i) => {
+    const v = monthly[k] || 0;
+    const fac = Math.max(0, Math.min(monthlyFac[k] || 0, Math.max(0, v)));
+    const x = pad + i * slot;
     const h = Math.abs(v) / maxV * (zero - 4);
-    const x = pad + i * ((W - pad * 2) / keys.length);
-    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    rect.setAttribute('x', x);
-    rect.setAttribute('y', v >= 0 ? zero - h : zero);
-    rect.setAttribute('width', bw);
-    rect.setAttribute('height', Math.max(1, h));
-    rect.setAttribute('rx', 1.5);
-    rect.setAttribute('fill', 'var(--series-1)');
-    rect.addEventListener('mousemove', (e) => showTip(`${fmtMonth(k)}: ${fmt$(v)}`, e.clientX, e.clientY));
-    rect.addEventListener('mouseleave', hideTip);
-    svg.append(rect);
+    const tip = (e) => showTip(
+      `${fmtMonth(k)}: ${fmt$(v)}` + (fac > 0.5 ? ` (PI summer salary ${fmt$(fac)})` : ''),
+      e.clientX, e.clientY);
+
+    // full net bar in blue, then the faculty-salary portion re-drawn in
+    // violet from the baseline up (positive months only)
+    const bars = [rect(x, v >= 0 ? zero - h : zero, bw, Math.max(1, h), 'var(--series-1)')];
+    if (v > 0 && fac > 0) {
+      bars.push(rect(x, zero - fac / maxV * (zero - 4), bw, Math.max(1, fac / maxV * (zero - 4)), 'var(--series-5)'));
+    }
+    for (const b of bars) {
+      b.addEventListener('mousemove', tip);
+      b.addEventListener('mouseleave', hideTip);
+      svg.append(b);
+    }
   });
-  const t1 = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-  t1.setAttribute('x', pad); t1.setAttribute('y', H + 11);
-  t1.textContent = fmtMonth(keys[0]);
-  const t2 = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-  t2.setAttribute('x', W - pad); t2.setAttribute('y', H + 11);
-  t2.setAttribute('text-anchor', 'end');
-  t2.textContent = fmtMonth(keys[keys.length - 1]);
-  svg.append(t1, t2);
+
+  const label = (x, anchor, text) => {
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', x); t.setAttribute('y', H + 11);
+    t.setAttribute('text-anchor', anchor);
+    t.textContent = text;
+    return t;
+  };
+  svg.append(label(pad, 'start', fmtMonth(domain[0])),
+             label(W - pad, 'end', fmtMonth(domain[domain.length - 1])));
   return svg;
 }
 
@@ -327,6 +382,10 @@ function renderPeople() {
       el('td', { class: 'num' }, numIn('annualFees', 0, 100)),
       el('td', {},
         el('span', { class: 'badge' }, person.source === 'payroll' ? 'from payroll' : 'manual'),
+        det && det.facultySalary ? el('span', {
+          class: 'badge', style: 'color:var(--series-5);border-color:var(--series-5)',
+          title: 'faculty salary — only charged in the months listed, not year-round',
+        }, ' summer salary · ' + (det.paidMonthNums || []).map((n) => MONTH_NAMES[n - 1]).join('/')) : null,
         det && det.lastPaid ? el('span', { class: 'badge', title: 'most recent salary month in the detail export' }, ' last paid ' + fmtMonth(det.lastPaid)) : null),
       el('td', {}, el('button', {
         class: 'btn danger',
@@ -425,7 +484,7 @@ function renderSim() {
     const project = DATA.projects.find((p) => p.id === pid);
     const ov = CFG.overrides[pid] || (CFG.overrides[pid] = {});
     const faRate = ov.faRate ?? project.faRate ?? 0;
-    const defaultBaseline = project.burn.recent ?? project.burn.linear ?? 0;
+    const defaultBaseline = project.burn.avg12 ?? project.burn.recent ?? project.burn.linear ?? 0;
     const baseline = ov.baselineBurn ?? defaultBaseline;
 
     const startBal = project.totals.remaining - project.totals.committed;
@@ -514,8 +573,8 @@ function renderSim() {
       el('span', { class: 'key' }, el('span', { class: 'swatch' }), ' With new assignments'),
       el('span', { class: 'key' }, el('span', { class: 'swatch dashed' }), ' Current spending only')));
     card.append(lineChart(months, [
-      { name: 'baseline', values: seriesBase, dashed: true },
-      { name: 'with', values: seriesWith, dashed: false },
+      { name: 'current only', values: seriesBase, dashed: true },
+      { name: 'with assignments', values: seriesWith, dashed: false },
     ]));
     box.append(card);
   }
@@ -523,8 +582,9 @@ function renderSim() {
 
 /* ----- projection line chart (SVG) ----- */
 
-function lineChart(months, series) {
-  const W = 640, H = 220, padL = 56, padR = 14, padT = 10, padB = 24;
+function lineChart(months, series, opts) {
+  const { W = 640, H = 220, padL = 56 } = opts || {};
+  const padR = 14, padT = 10, padB = 24;
   const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
@@ -552,10 +612,12 @@ function lineChart(months, series) {
     svg.append(label);
   }
 
-  // x labels: ~6 month ticks
-  const every = Math.max(1, Math.ceil(months.length / 6));
+  // x labels: ~6 month ticks (fewer on small charts); the last month always
+  // gets a label, and a modulo tick too close to it is dropped
+  const every = Math.max(1, Math.ceil(months.length / (W < 400 ? 4 : 6)));
   months.forEach((m, i) => {
     if (i % every !== 0 && i !== months.length - 1) return;
+    if (i !== months.length - 1 && months.length - 1 - i < every * 0.6) return;
     const label = document.createElementNS(NS, 'text');
     label.setAttribute('x', x(i)); label.setAttribute('y', H - 6);
     label.setAttribute('text-anchor', i === months.length - 1 ? 'end' : 'middle');
@@ -571,6 +633,17 @@ function lineChart(months, series) {
     path.setAttribute('stroke-width', '2');
     if (s.dashed) path.setAttribute('stroke-dasharray', '4 4');
     svg.append(path);
+    if (s.endLabel) {
+      const last = s.values[s.values.length - 1];
+      const t = document.createElementNS(NS, 'text');
+      t.setAttribute('x', W - padR);
+      t.setAttribute('y', Math.max(padT + 9, Math.min(H - padB - 3, y(last) - 5)));
+      t.setAttribute('text-anchor', 'end');
+      t.setAttribute('font-weight', '600');
+      t.setAttribute('fill', last < 0 ? 'var(--critical)' : 'var(--good-text)');
+      t.textContent = fmtK(last) + ' at end';
+      svg.append(t);
+    }
   }
 
   // hover crosshair + tooltip
@@ -586,9 +659,8 @@ function lineChart(months, series) {
     if (i < 0 || i >= months.length) { cross.setAttribute('visibility', 'hidden'); hideTip(); return; }
     cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i));
     cross.setAttribute('visibility', 'visible');
-    const withV = series.find((s) => !s.dashed).values[i];
-    const baseV = series.find((s) => s.dashed).values[i];
-    showTip(`${fmtMonth(months[i])} — with: ${fmt$(withV)} · baseline: ${fmt$(baseV)}`, e.clientX, e.clientY);
+    const parts = series.map((s) => (series.length > 1 ? `${s.name}: ` : '') + fmt$(s.values[i]));
+    showTip(`${fmtMonth(months[i])} — ${parts.join(' · ')}`, e.clientX, e.clientY);
   });
   svg.addEventListener('mouseleave', () => { cross.setAttribute('visibility', 'hidden'); hideTip(); });
   return svg;

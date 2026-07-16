@@ -83,6 +83,12 @@ def months_between(a, b):
     return max(0.0, (db - da).days / 30.44)
 
 
+def month_add(m, n):
+    """'2026-07' + n months."""
+    y, mo = int(m[:4]), int(m[5:7]) - 1 + n
+    return f"{y + mo // 12}-{mo % 12 + 1:02d}"
+
+
 # ---------------------------------------------------------------------------
 # CSV classification and parsing
 # ---------------------------------------------------------------------------
@@ -213,6 +219,7 @@ def estimate_people(transactions, window_months):
     fringe = {}     # person -> total
     fees = {}       # person -> total
     projects = {}   # person -> set of projects
+    types = {}      # person -> set of salary expense types
 
     for t in transactions:
         person = t["person"]
@@ -223,6 +230,7 @@ def estimate_people(transactions, window_months):
             if "fringe" in t["type"].lower():
                 fringe[person] = fringe.get(person, 0.0) + t["amount"]
             else:
+                types.setdefault(person, set()).add(t["type"])
                 m = month_of(t["date"])
                 if m:
                     bym = salaries.setdefault(person, {})
@@ -249,6 +257,8 @@ def estimate_people(transactions, window_months):
             "lastPaid": nonzero[-1][0] if nonzero else None,
             "projects": sorted(projects.get(person, [])),
             "salaryHistory": {m: round(v, 2) for m, v in nonzero},
+            "facultySalary": any("faculty" in ty.lower() for ty in types.get(person, ())),
+            "paidMonthNums": sorted({int(m[5:7]) for m, _ in nonzero}),
         })
     return people
 
@@ -399,12 +409,16 @@ def _build_payload_uncached(data_dir):
     transactions = list(labor.values()) + list(nonlabor.values())
 
     # transaction aggregates per project
-    monthly = {}    # project -> {month: net}
+    monthly = {}        # project -> {month: net}
+    monthly_fac = {}    # project -> {month: faculty-salary portion}
     for t in transactions:
         m = month_of(t["date"])
         if m:
             bym = monthly.setdefault(t["project"], {})
             bym[m] = bym.get(m, 0.0) + t["amount"]
+            if t["kind"] == "labor" and "faculty" in t["type"].lower():
+                byf = monthly_fac.setdefault(t["project"], {})
+                byf[m] = byf.get(m, 0.0) + t["amount"]
 
     # project names conventionally end with the PI surname; collect surnames
     # so display names can drop them ("DOE DE-SC0020267 Holmes" -> "DOE DE-SC0020267")
@@ -450,12 +464,19 @@ def _build_payload_uncached(data_dir):
                 fa_rate = round(indirect_budget / direct_budget, 4)
                 fa_source = "inferred"
 
-        # burn rate: average of the last 3 complete months with real activity
+        # burn rates: last-3-active-months average (current staffing level),
+        # 12-month average (captures seasonality like summer salary), and a
+        # linear whole-award average as the fallback.
         bym = monthly.get(pid, {})
         complete = [(m, v) for m, v in sorted(bym.items())
                     if m < this_month and abs(v) > 1]
         recent3 = complete[-3:]
         recent_burn = (sum(v for _, v in recent3) / len(recent3)) if recent3 else None
+        avg12 = None
+        if complete:
+            last, first = complete[-1][0], complete[0][0]
+            window = [mo for mo in (month_add(last, -i) for i in range(12)) if mo >= first]
+            avg12 = sum(bym.get(mo, 0.0) for mo in window) / len(window)
         linear_burn = None
         if start and totals["spent"] > 0:
             elapsed = months_between(start, today_iso)
@@ -474,9 +495,11 @@ def _build_payload_uncached(data_dir):
             "categories": cats,
             "totals": totals,
             "monthly": {m: round(v, 2) for m, v in sorted(bym.items())},
+            "monthlyFaculty": {m: round(v, 2) for m, v in sorted(monthly_fac.get(pid, {}).items())},
             "burn": {
                 "recent": round(recent_burn, 2) if recent_burn is not None else None,
                 "recentMonths": [m for m, _ in recent3],
+                "avg12": round(avg12, 2) if avg12 is not None else None,
                 "linear": round(linear_burn, 2) if linear_burn is not None else None,
             },
             "hasDetail": pid in meta,
