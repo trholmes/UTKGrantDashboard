@@ -449,6 +449,12 @@ function renderPortfolio() {
               style: `width:${Math.min(100, frac * 100)}%`,
             })))));
     }
+    tbl.append(el('tr', { class: 'total-row' },
+      el('td', {}, 'Total award'),
+      el('td', {}, fmt$(p.totals.budget)),
+      el('td', {}, fmt$(p.totals.spent)),
+      el('td', { class: p.totals.remaining < -0.5 ? 'neg' : '' }, fmt$(p.totals.remaining)),
+      el('td', {})));
     card.append(tbl);
 
     // who's on this grant (salary lines from the detail export)
@@ -556,7 +562,7 @@ function renderPortfolio() {
     if (active) {
       const ov = CFG.overrides[p.id] || (CFG.overrides[p.id] = {});
       card.append(el('div', { class: 'baseline-ctl' },
-        'Expected new funding: $',
+        'New funding beyond the total above: $',
         el('input', {
           type: 'number', step: 1000, min: 0, placeholder: '0',
           value: ov.expectedExtra ?? '',
