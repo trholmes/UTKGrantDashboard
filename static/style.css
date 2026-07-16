@@ -169,6 +169,10 @@ input, select {
   background: var(--page); border: 1px solid var(--baseline);
   border-radius: 6px; padding: 3px 7px;
 }
+/* no spinner arrows on number fields — they're all type-in values */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .badge { font-size: 10.5px; color: var(--muted); border: 1px solid var(--grid); border-radius: 99px; padding: 1px 7px; }
 #add-person, #add-assignment { margin-top: 10px; }
 
