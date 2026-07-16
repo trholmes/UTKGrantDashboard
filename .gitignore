@@ -2,6 +2,9 @@
 data/*
 !data/README.md
 
+# Generated demo exports (recreate with demo/make_demo_data.py)
+demo/data/
+
 .DS_Store
 __pycache__/
 *.pyc

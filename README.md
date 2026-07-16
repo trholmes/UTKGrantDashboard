@@ -13,6 +13,11 @@ already pull from the university reporting system, and gives you:
   optional student fees. People are seeded automatically from the payroll
   lines in your detail export, with their real salaries and fringe rates.
 
+![The dashboard, showing fictional demo data](docs/screenshot.png)
+
+*(Fictional demo data — regenerate this view with
+`python3 demo/make_demo_data.py && python3 dashboard.py --data demo/data`.)*
+
 ## Security model
 
 This is the part to check before trusting it with financial data:
