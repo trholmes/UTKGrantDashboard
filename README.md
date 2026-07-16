@@ -43,25 +43,48 @@ This is the part to check before trusting it with financial data:
 4. When you have fresh exports, drop them in `data/` and click
    **Reload data** in the page header.
 
-## What to export
+## Getting the data
 
-Two report types are recognized (any filename ending in `.csv` works — the
-tool identifies them by their columns):
+Two reports feed the dashboard. Any filename ending in `.csv` works — the
+tool identifies each file by its columns, so don't worry about renaming.
 
-1. **PI Dashboard export** — the budget-vs-actuals summary with one row per
-   project × expenditure category (columns like `Project Number`, `Budget`,
-   `SUM Direct Cost`, `Expenditure Category`). This drives the portfolio
-   view and flags. Export it for **all your projects**.
+### 1. PI Dashboard export — required
 
-2. **RPT_GMS_007 — Sponsored Project Detail Report** (CSV) — the
-   transaction-level detail report. This drives monthly burn rates and
-   seeds the hiring simulator with real people, salaries, and fringe rates.
-   Export it for **all active accounts** with the **widest date range** the
-   system allows. Multiple files are fine (e.g., one per account) — they
-   merge and de-duplicate automatically.
+This is the budget-vs-actuals summary (one row per project × expenditure
+category). It provides the **budgets, remaining balances, and committed
+costs** — without it there are no award cards, no flags, and nothing for
+projections to anchor to.
 
-You can refresh either file whenever you like; the newest file wins where
-they overlap.
+1. Open the [PI Dashboard](https://oaxfdiprod-idabxacptyfb-ia.analytics.ocp.oraclecloud.com/ui/dv/?pageid=visualAnalyzer&reportmode=full&reportpath=%2F%40Catalog%2Fshared%2FUT%2FFIN%2FPI%2FPI%20Dashboard)
+   in Oracle Analytics.
+2. Navigate to **Project Summary**.
+3. Enter your name in **Project PI / Manager**.
+4. Export the Project Summary table as **CSV** and drop it in `data/`.
+
+### 2. RPT_GMS_007 — Sponsored Project Detail Report — strongly recommended
+
+This is the transaction-level report. It provides **monthly burn rates and
+spending history, everyone paid from each award (with salaries and fringe
+rates that seed the hiring simulator), support splits, and exact F&A
+rates**. Without it the dashboard still works, but falls back to linear
+burn estimates and an empty People section.
+
+1. Open [RPT_GMS_007](https://fa-ewlq-saasfaprod1.fa.ocs.oraclecloud.com/analytics/saw.dll?bipublisherEntry&Action=open&itemType=.xdo&bipPath=%2FCustom%2FProjects%2FSponsored%20Projects%2FRPT_GMS_007%20-%20Sponsored%20Project%20Detail%20Report.xdo&path=%2Fshared%2FCustom%2FProjects%2FSponsored%20Projects%2FRPT_GMS_007%20-%20Sponsored%20Project%20Detail%20Report.xdo)
+   in Oracle BI Publisher.
+2. Add **all of your project IDs** (the `SPN…` numbers from the PI
+   Dashboard export) and select the **widest time period available** —
+   more history means better burn rates and seasonality detection.
+3. Export to **CSV** and drop it in `data/`.
+
+Notes:
+
+* Multiple RPT files are fine (e.g., one per account, or overlapping date
+  ranges) — they merge and de-duplicate automatically. For PI Dashboard
+  files, the newest file wins per project.
+* Re-export both whenever you want fresh numbers (monthly is plenty) and
+  click **Reload data** in the page header. Old files can stay in `data/`.
+* Don't worry that the RPT export is huge (hundreds of MB) — the reporting
+  tool pads it heavily; parsing is a few seconds, once, per new file.
 
 ## Notes on the numbers
 
