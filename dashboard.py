@@ -263,6 +263,52 @@ def estimate_people(transactions, window_months):
     return people
 
 
+def current_support(proj_people):
+    """Per person: how their support splits across projects, using the most
+    recent month that has salary activity for them."""
+    by_person = {}  # person -> {month: {project: amount}}
+    for pid, ppl in proj_people.items():
+        for person, bym in ppl.items():
+            for m, v in bym.items():
+                if abs(v) > 1:
+                    bym_p = by_person.setdefault(person, {}).setdefault(m, {})
+                    bym_p[pid] = bym_p.get(pid, 0.0) + v
+
+    out = {}
+    for person, months in by_person.items():
+        m = max(months)
+        shares = {pid: v for pid, v in months[m].items() if abs(v) > 1}
+        total = sum(shares.values())
+        if abs(total) < 1:
+            continue
+        out[person] = {
+            "month": m,
+            "shares": sorted(
+                ({"project": pid, "amount": round(v, 2), "pct": round(v / total, 4)}
+                 for pid, v in shares.items()),
+                key=lambda s: -s["amount"]),
+        }
+    return out
+
+
+def project_personnel(people_months, faculty_people):
+    """Who is paid from a project: recent monthly salary and last paid month."""
+    out = []
+    for person, bym in people_months.items():
+        nonzero = [(m, v) for m, v in sorted(bym.items()) if abs(v) > 1]
+        if not nonzero:
+            continue
+        recent = nonzero[-3:]
+        out.append({
+            "name": person,
+            "monthly": round(sum(v for _, v in recent) / len(recent), 2),
+            "lastPaid": nonzero[-1][0],
+            "faculty": person in faculty_people,
+        })
+    out.sort(key=lambda p: (p["lastPaid"], p["monthly"]), reverse=True)
+    return out
+
+
 def compute_flags(projects, today_iso):
     """Rule-based issues list, most severe first."""
     flags = []
@@ -273,25 +319,58 @@ def compute_flags(projects, today_iso):
         label = p["shortName"]
         tot = p["totals"]
 
-        # 1. category overruns / charges against zero budget
+        # Rebudgeting rule: any line item may deviate by up to 10% of the
+        # TOTAL award, so overruns are graded against that allowance.
+        allowance = tot["budget"] * 0.10 if tot["budget"] > 0 else None
+
+        # Exception: fringe charging far above the budgeted rate is treated
+        # as critical regardless of the allowance — it usually signals a
+        # rate/charging error that grows with every payroll run.
+        suppress = set()
+        sal = next((c for c in p["categories"]
+                    if c["category"].lower().startswith("salaries")), None)
+        fr = next((c for c in p["categories"]
+                   if "fringe" in c["category"].lower()), None)
+        if (sal and fr and sal["spent"] > 1000 and sal["budget"] > 0
+                and fr["budget"] > 0 and fr["spent"] - fr["budget"] > 5000):
+            charged = fr["spent"] / sal["spent"]
+            budgeted = fr["budget"] / sal["budget"]
+            if budgeted > 0 and charged > 1.5 * budgeted:
+                suppress.add(fr["category"])
+                flags.append({
+                    "severity": "critical", "project": p["id"],
+                    "title": f"{label}: fringe charging far above the budgeted rate",
+                    "detail": (f"Fringe is running at {charged*100:.0f}% of salaries vs "
+                               f"{budgeted*100:.0f}% budgeted (${fr['spent']-fr['budget']:,.0f} "
+                               f"over so far, growing with every payroll) — likely a "
+                               f"rate or charging error rather than a rebudgeting choice."),
+                })
+
         for c in p["categories"]:
-            if c["remaining"] < -0.5:
-                over = -c["remaining"]
-                if c["budget"] <= 0:
-                    flags.append({
-                        "severity": "serious", "project": p["id"],
-                        "title": f"{label}: {c['category']} charged with no budget",
-                        "detail": f"${c['spent']:,.0f} spent against a $0 budget line.",
-                    })
-                else:
-                    pct = over / c["budget"] * 100
-                    sev = "critical" if (over > 5000 or pct > 25) else "serious"
-                    flags.append({
-                        "severity": sev, "project": p["id"],
-                        "title": f"{label}: {c['category']} overspent by ${over:,.0f}",
-                        "detail": (f"${c['spent']:,.0f} spent of a ${c['budget']:,.0f} budget "
-                                   f"({c['spent']/c['budget']*100:.0f}%)."),
-                    })
+            if c["remaining"] >= -0.5 or c["category"] in suppress:
+                continue
+            over = -c["remaining"]
+            if allowance:
+                frac = over / allowance
+                sev = ("critical" if frac >= 1.0 else "serious" if frac >= 0.5
+                       else "warning" if frac >= 0.25 else "info")
+                flex = (f" Uses {frac*100:.0f}% of the line-item flexibility "
+                        f"(±${allowance:,.0f} = 10% of the award).")
+            else:
+                sev, flex = "serious", ""
+            if c["budget"] <= 0:
+                flags.append({
+                    "severity": sev, "project": p["id"],
+                    "title": f"{label}: {c['category']} charged with no budget",
+                    "detail": f"${c['spent']:,.0f} spent against a $0 budget line.{flex}",
+                })
+            else:
+                flags.append({
+                    "severity": sev, "project": p["id"],
+                    "title": f"{label}: {c['category']} overspent by ${over:,.0f}",
+                    "detail": (f"${c['spent']:,.0f} spent of a ${c['budget']:,.0f} budget "
+                               f"({c['spent']/c['budget']*100:.0f}%).{flex}"),
+                })
 
         if not active or not p["start"] or not p["end"]:
             continue
@@ -417,6 +496,7 @@ def _build_payload_uncached(data_dir):
                       and "faculty" in t["type"].lower()}
     monthly = {}        # project -> {month: net}
     monthly_parts = {}  # project -> {month: {fac, personnel, other}}
+    proj_people = {}    # project -> person -> {month: salary}
     for t in transactions:
         m = month_of(t["date"])
         if not m:
@@ -427,8 +507,12 @@ def _build_payload_uncached(data_dir):
             m, {"fac": 0.0, "personnel": 0.0, "other": 0.0})
         if t["kind"] == "labor":
             ty = t["type"].lower()
-            is_fac = "faculty" in ty or ("fringe" in ty and t["person"] in faculty_people)
+            is_fringe = "fringe" in ty
+            is_fac = "faculty" in ty or (is_fringe and t["person"] in faculty_people)
             parts["fac" if is_fac else "personnel"] += t["amount"]
+            if not is_fringe and t["person"]:
+                bymp = proj_people.setdefault(t["project"], {}).setdefault(t["person"], {})
+                bymp[m] = bymp.get(m, 0.0) + t["amount"]
         else:
             parts["other"] += t["amount"]
 
@@ -509,6 +593,7 @@ def _build_payload_uncached(data_dir):
             "monthly": {m: round(v, 2) for m, v in sorted(bym.items())},
             "monthlyParts": {m: {k: round(v, 2) for k, v in parts.items()}
                              for m, parts in sorted(monthly_parts.get(pid, {}).items())},
+            "personnel": project_personnel(proj_people.get(pid, {}), faculty_people),
             "burn": {
                 "recent": round(recent_burn, 2) if recent_burn is not None else None,
                 "recentMonths": [m for m, _ in recent3],
@@ -527,6 +612,9 @@ def _build_payload_uncached(data_dir):
         w_to = max(w[1] for w in windows)
         window_months = max(1.0, months_between(w_from, w_to))
     people = estimate_people(transactions, window_months)
+    support = current_support(proj_people)
+    for person in people:
+        person["support"] = support.get(person["name"])
 
     flags = compute_flags([p for p in projects if p["inDashboard"]], today_iso)
 

@@ -247,6 +247,33 @@ function renderPortfolio() {
     }
     card.append(tbl);
 
+    // who's on this grant (salary lines from the detail export)
+    if ((p.personnel || []).length) {
+      const curMonth = DATA.today.slice(0, 7);
+      const section = el('div', { class: 'spark-block' },
+        el('div', { class: 'spark-title' }, "Who's on this grant"));
+      const tbl = el('table', { class: 'cats' });
+      for (const person of p.personnel) {
+        const stale = monthDiff(person.lastPaid, curMonth) > 2;
+        tbl.append(el('tr', { class: stale ? 'stale' : '' },
+          el('td', {},
+            el('span', {
+              class: 'dot',
+              style: `background:${person.faculty ? 'var(--series-5)' : 'var(--series-1)'};margin-right:6px`,
+            }),
+            person.name,
+            person.faculty ? el('span', { class: 'badge', style: 'margin-left:6px' }, 'PI summer') : null),
+          el('td', {}, stale ? '—' : fmt$(person.monthly) + '/mo'),
+          el('td', { class: 'muted-cell' }, 'last paid ' + fmtMonth(person.lastPaid))));
+      }
+      section.append(tbl);
+      card.append(section);
+    } else if (p.hasDetail) {
+      card.append(el('div', { class: 'spark-block' },
+        el('div', { class: 'spark-title' }, "Who's on this grant"),
+        el('div', { class: 'burn-line' }, 'No salaries charged in the export window.')));
+    }
+
     // monthly spending sparkline (shared axes across all cards)
     const hasMonthly = Object.keys(p.monthly || {}).length > 0;
     if (hasMonthly && sparkDomain.length) {
@@ -398,13 +425,24 @@ function barSpark(monthlyParts, domain, maxV) {
 
 /* ----- people ----- */
 
+function supportLabel(support) {
+  // "Jun 2026: DOE DE-SC0023122 50% · Princeton SUB0000919 50%"
+  if (!support || !support.shares || !support.shares.length) return '—';
+  const parts = support.shares.map((s) => {
+    const proj = DATA.projects.find((p) => p.id === s.project);
+    const name = proj ? proj.shortName : s.project;
+    return support.shares.length > 1 ? `${name} ${Math.round(s.pct * 100)}%` : name;
+  });
+  return `${fmtMonth(support.month)}: ${parts.join(' · ')}`;
+}
+
 function renderPeople() {
   const box = $('#people');
   const tbl = el('table', { class: 'people' },
     el('tr', {},
       el('th', {}, 'Name'), el('th', { class: 'num' }, 'Monthly salary ($)'),
       el('th', { class: 'num' }, 'Fringe (%)'), el('th', { class: 'num' }, 'Fees+tuition ($/yr)'),
-      el('th', {}, 'Source'), el('th', {})));
+      el('th', {}, 'Current support'), el('th', {}, 'Source'), el('th', {})));
 
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
@@ -425,6 +463,7 @@ function renderPeople() {
       el('td', { class: 'num' }, numIn('monthlySalary', 0, 50)),
       el('td', { class: 'num' }, numIn('fringeRate', 100, 0.1)),
       el('td', { class: 'num' }, numIn('annualFees', 0, 100)),
+      el('td', { class: 'muted-cell' }, supportLabel(det && det.support)),
       el('td', {},
         el('span', { class: 'badge' }, person.source === 'payroll' ? 'from payroll' : 'manual'),
         det && det.facultySalary ? el('span', {

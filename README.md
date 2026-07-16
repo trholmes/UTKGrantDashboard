@@ -68,9 +68,15 @@ they overlap.
 * The detail report is exported by the reporting tool as a cartesian
   product of labor × non-labor lines; the parser de-duplicates each side
   and validates against the report's own totals.
-* Burn rate = average of the last 3 complete months with activity in the
-  detail export; if no detail is loaded, it falls back to a linear average
-  over the award period.
+* Line-item overruns are graded against the rebudgeting rule that any
+  line may deviate by up to **10% of the total award**: a flag is only
+  critical when that allowance is exhausted, and small overruns show as
+  notes. Exception: fringe charging far above the budgeted fringe rate is
+  always critical, since it usually signals a charging error that grows
+  with every payroll.
+* Burn rate prefers a 12-month average (capturing seasonality like summer
+  salary), falling back to the last 3 active months, then to a linear
+  average over the award period.
 * Simulator cost model: `salary × effort + fringe (person's actual rate) +
   F&A × (salary + fringe)`. Student fees/tuition are excluded from the F&A
   base (MTDC) and only charged if you check the box. The F&A rate comes
