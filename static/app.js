@@ -92,6 +92,8 @@ function initConfig() {
   CFG.people = Array.isArray(CFG.people) ? CFG.people : [];
   CFG.assignments = Array.isArray(CFG.assignments) ? CFG.assignments : [];
   CFG.overrides = CFG.overrides && typeof CFG.overrides === 'object' ? CFG.overrides : {};
+  CFG.ui = CFG.ui && typeof CFG.ui === 'object' ? CFG.ui : {};
+  $('#show-notes').checked = !!CFG.ui.showNotes;
   // merge in newly-detected payroll people (matched by name)
   const known = new Set(CFG.people.map((p) => p.name));
   for (const det of DATA.people) {
@@ -146,16 +148,23 @@ function severityLabel(s) {
 function renderFlags() {
   const box = $('#flags');
   box.replaceChildren();
+  const showNotes = $('#show-notes').checked;
+  const shown = DATA.flags.filter((f) => showNotes || f.severity !== 'info');
+  const hidden = DATA.flags.length - shown.length;
   if (!DATA.flags.length) {
     box.append(el('div', { class: 'flag-empty' }, 'No issues flagged. \u{1F389}'));
     return;
   }
-  for (const f of DATA.flags) {
+  for (const f of shown) {
     box.append(el('div', { class: 'flag' },
       el('span', { class: `sev sev-${f.severity}` }, severityLabel(f.severity)),
       el('span', {},
         el('span', { class: 'title' }, f.title + ' '),
         el('span', { class: 'detail' }, f.detail))));
+  }
+  if (hidden > 0) {
+    box.append(el('div', { class: 'flag-empty' },
+      `${hidden} note-level flag${hidden === 1 ? '' : 's'} hidden.`));
   }
 }
 
@@ -773,6 +782,11 @@ function niceStep(raw) {
 
 $('#reload-btn').addEventListener('click', load);
 $('#show-closed').addEventListener('change', renderPortfolio);
+$('#show-notes').addEventListener('change', () => {
+  CFG.ui.showNotes = $('#show-notes').checked;
+  save();
+  renderFlags();
+});
 $('#add-person').addEventListener('click', () => {
   CFG.people.push({ id: uid(), name: '', monthlySalary: 0, fringeRate: 0.1, annualFees: 0, source: 'manual' });
   save(); renderPeople();

@@ -354,8 +354,8 @@ def compute_flags(projects, today_iso):
                 frac = over / allowance
                 sev = ("critical" if frac >= 1.0 else "serious" if frac >= 0.5
                        else "warning" if frac >= 0.25 else "info")
-                flex = (f" Uses {frac*100:.0f}% of the line-item flexibility "
-                        f"(±${allowance:,.0f} = 10% of the award).")
+                flex = (f" Over by {over/tot['budget']*100:.1f}% of the total award "
+                        f"— the rebudgeting rule allows up to 10% (${allowance:,.0f}).")
             else:
                 sev, flex = "serious", ""
             if c["budget"] <= 0:
