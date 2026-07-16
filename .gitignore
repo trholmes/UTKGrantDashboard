@@ -1,0 +1,7 @@
+# Financial data and saved scenarios stay local — never committed.
+data/*
+!data/README.md
+
+.DS_Store
+__pycache__/
+*.pyc
