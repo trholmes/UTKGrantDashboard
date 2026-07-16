@@ -250,11 +250,14 @@ function renderSummary() {
     series.push(pools.reduce((a, pool) => a + (pool.end >= m ? pool.bal : 0), 0) - unmet);
   }
 
-  // representative monthly costs: a non-summer month and the summer peak
-  const monthlyByMm = Array.from({ length: 12 }, (_, i) =>
-    personnelFor(`2030-${String(i + 1).padStart(2, '0')}`));
-  const baseMonthly = Math.min(...monthlyByMm);
-  const peakMonthly = Math.max(...monthlyByMm);
+  // team cost decomposition: year-round people vs. PI/faculty summer salary
+  const loadedOf = (t) => (t.person.monthlySalary || 0) * (1 + (t.person.fringeRate || 0));
+  const yearRound = team.filter((t) => !t.det.facultySalary);
+  const summerFolk = team.filter((t) => t.det.facultySalary);
+  const baseMonthly = yearRound.reduce((a, t) => a + loadedOf(t), 0);
+  const peakMonthly = baseMonthly + summerFolk.reduce((a, t) => a + loadedOf(t), 0);
+  const summerMonths = [...new Set(summerFolk.flatMap((t) => t.det.paidMonthNums || []))]
+    .sort((a, b) => a - b).map((n) => MONTH_NAMES[n - 1]).join('/');
 
   const fundedThrough = runsOut === null ? horizon : monthAdd(runsOut, -1);
   const runwayMonths = monthDiff(curMonth, fundedThrough);
@@ -271,19 +274,64 @@ function renderSummary() {
     stat('Available now', fmt$(available),
       expired > 0 ? `${fmt$(expired)} of it expires unspent at this pace` : 'across all active awards'),
     stat('Current team', fmt$(baseMonthly) + '/mo',
-      (peakMonthly > baseMonthly + 1 ? `${fmt$(peakMonthly)}/mo in summer · ` : '')
-        + `${team.length} people (salary+fringe) + ${fmt$(otherTrend)}/mo other (F&A, fees, travel, …)`),
+      `${yearRound.length} people year-round, salary+fringe`
+        + (summerFolk.length
+          ? ` · ${fmt$(peakMonthly)}/mo in ${summerMonths} (${summerFolk.map((t) => t.person.name).join(', ')} summer salary)`
+          : '')),
+    stat('Other spending', fmt$(otherTrend) + '/mo',
+      '12-mo trend: F&A, fees, travel, supplies, …'),
     stat('Funded through', fmtMonth(fundedThrough),
       runsOut === null
         ? 'to the end of your last award'
         : `bring in new money by then (${fmt$(unmet)} short through ${fmtMonth(horizon)})`,
       runwayMonths >= 12 ? 'ok' : 'bad')));
 
+  // ground the projection with reconstructed history: total available funds
+  // over the last ~18 months, rebuilt backwards from today's balances the
+  // same way the per-award charts are
+  let histMonths = [];
+  const detailMonths = [...new Set(active.flatMap((p) =>
+    Object.keys(p.monthly || {}).filter((m) => m <= curMonth)))].sort();
+  if (detailMonths.length) {
+    histMonths = monthRange(detailMonths[0], curMonth).slice(-18);
+  }
+  const histTotals = histMonths.map(() => 0);
+  for (const p of active) {
+    let bal = p.totals.remaining - p.totals.committed;
+    const balBy = { [curMonth]: bal };
+    let cursor = curMonth;
+    if (histMonths.length) {
+      for (let m = monthAdd(curMonth, -1); m >= histMonths[0]; m = monthAdd(m, -1)) {
+        bal += (p.monthly || {})[cursor] || 0;
+        balBy[m] = bal;
+        cursor = m;
+      }
+    }
+    // an award contributes nothing before it started — new money shows as a
+    // step up in the history, which is exactly what "bringing money in" looks like
+    const startMonth = p.start ? p.start.slice(0, 7) : null;
+    histMonths.forEach((m, i) => {
+      if (!startMonth || m >= startMonth) histTotals[i] += balBy[m];
+    });
+  }
+
+  const timeline = histMonths.concat(months);
+  const actualSeries = timeline.map((m, i) => (i < histMonths.length ? histTotals[i] : null));
+  const projSeries = timeline.map((m, i) => {
+    if (i < histMonths.length - 1) return null;
+    if (i === histMonths.length - 1) return available;  // join at "now"
+    return series[i - histMonths.length];
+  });
+
   card.append(el('div', { class: 'spark-title', style: 'margin-top:6px' },
-    'Projected available funds — current team + other-spending trend, balances expire as awards end'));
-  card.append(lineChart(months, [
-    { name: 'available funds', values: series, endLabel: true },
+    'Available funds — history, then projected at current team + other-spending trend; balances expire as awards end'));
+  card.append(lineChart(timeline, [
+    { name: 'projected', values: projSeries, dashed: true, endLabel: true },
+    { name: 'actual', values: actualSeries },
   ], { W: 960, H: 170, padL: 56 }));
+  card.append(el('div', { class: 'legend' },
+    el('span', { class: 'key' }, el('span', { class: 'swatch' }), ' actual available funds'),
+    el('span', { class: 'key' }, el('span', { class: 'swatch dashed' }), ' projection')));
   card.append(el('div', { class: 'burn-line' }, 'Awards end: ',
     active.slice().sort((a, b) => (a.end < b.end ? -1 : 1))
       .map((p) => `${p.shortName} ${fmtMonth(p.end.slice(0, 7))}`).join(' · '),
