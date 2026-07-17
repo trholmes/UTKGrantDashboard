@@ -215,6 +215,7 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 .stat .stat-value.ok { color: var(--good-text); }
 .stat .stat-value.bad { color: var(--critical); }
 .stat .stat-note { color: var(--ink-2); font-size: 12px; }
+.expires-warn { color: var(--critical); font-weight: 650; }
 .baseline-ctl { color: var(--ink-2); font-size: 12.5px; display: flex; gap: 6px; align-items: center; }
 .baseline-ctl input { width: 90px; text-align: right; }
 

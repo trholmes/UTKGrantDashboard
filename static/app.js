@@ -418,8 +418,10 @@ function renderSummary() {
     stat('Active awards', String(active.length),
       `${fmt$(totBudget)} total · ${fmt$(totSpent)} spent`),
     stat('Available now', fmt$(available),
-      (extraTotal > 0 ? `+ ${fmt$(extraTotal)} expected (entered manually) · ` : '')
-        + (expired > 0 ? `${fmt$(expired)} expires unspent at this pace` : 'across all active awards')),
+      [(extraTotal > 0 ? `+ ${fmt$(extraTotal)} expected (entered manually) · ` : ''),
+       (expired > 0
+         ? el('span', { class: 'expires-warn' }, `${fmt$(expired)} expires unspent at this pace`)
+         : 'across all active awards')]),
     stat('Current team', fmt$(baseMonthly) + '/mo',
       `${yearRound.length} people year-round — salary+fringe+fees+their F&A`
         + (summerFolk.length
