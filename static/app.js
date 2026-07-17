@@ -433,9 +433,17 @@ function renderSummary() {
       const fees = (person.annualFees || 0) / 12;
       return (!d.facultySalary || (d.paidMonthNums || []).includes(mm) ? loaded : 0) + fees;
     });
-    return { name, values, total: values.reduce((a, b) => a + b, 0) };
+    return {
+      name,
+      values,
+      total: values.reduce((a, b) => a + b, 0),
+      // rank on history only: config edits (pay changes, expected ends)
+      // must never reshuffle everyone's colors mid-experiment
+      hist: values.slice(0, projStart).reduce((a, b) => a + b, 0),
+    };
   }).filter((p) => p.total > 1);
-  persons.sort((a, b) => b.total - a.total);
+  persons.sort((a, b) => (b.hist - a.hist) || (b.total - a.total)
+    || a.name.localeCompare(b.name));
 
   const PERSON_COLORS = ['var(--series-2)', 'var(--series-3)', 'var(--series-5)',
     'var(--series-6)', 'var(--series-7)', 'var(--series-8)'];
