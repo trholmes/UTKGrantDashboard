@@ -74,6 +74,7 @@ section.collapsed .sec-body { display: none; }
 h3 { font-size: 14px; margin: 0; }
 .subtitle, .hint { color: var(--ink-2); font-size: 12.5px; }
 .hint { margin: 2px 0 10px; max-width: 72ch; }
+#people-section .hint { max-width: none; }
 
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
