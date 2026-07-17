@@ -61,7 +61,14 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 20px 48px; }
 h1 { font-size: 19px; margin: 0; }
 h2 { font-size: 15px; margin: 30px 0 10px; }
 section.collapsible > h2 { cursor: pointer; user-select: none; }
-.chev { display: inline-block; transition: transform 0.15s; font-size: 11px; color: var(--muted); width: 12px; }
+section.collapsible > h2:hover .chev { color: var(--ink); border-color: var(--muted); }
+.chev {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin-right: 4px; vertical-align: -3px;
+  border: 1px solid var(--baseline); border-radius: 5px;
+  background: var(--surface); color: var(--ink-2); font-size: 10px;
+  transition: transform 0.15s;
+}
 section.collapsed .chev { transform: rotate(-90deg); }
 section.collapsed .sec-body { display: none; }
 h3 { font-size: 14px; margin: 0; }
@@ -124,7 +131,8 @@ tr.filtered-out { opacity: 0.45; }
   display: flex; flex-direction: column; gap: 10px;
 }
 .card-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
-.card-head .proj-id { color: var(--muted); font-size: 11.5px; }
+.proj-id { color: var(--muted); font-size: 11.5px; }
+.card > .proj-id { margin-top: -8px; }
 .status-chip {
   font-size: 11px; padding: 1px 8px; border-radius: 99px;
   border: 1px solid var(--baseline); color: var(--ink-2); flex: none;

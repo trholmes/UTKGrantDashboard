@@ -513,7 +513,7 @@ function renderSummary() {
   persons.slice(0, PERSON_COLORS.length).forEach((p, i) => personColors.set(p.name, PERSON_COLORS[i]));
   rest.forEach((p) => personColors.set(p.name, 'var(--series-4)'));
   barSeries.push({
-    name: 'not tied to a person', color: 'var(--muted)',
+    name: 'non-personnel', color: 'var(--muted)',
     values: timeline.map((m, i) => {
       if (i < projStart) {
         const total = active.reduce((a, p) => a + ((p.monthly || {})[m] || 0), 0);
@@ -600,12 +600,12 @@ function renderPortfolio() {
 
     const card = el('div', { class: 'card' });
     card.append(el('div', { class: 'card-head' },
-      el('div', {},
-        el('h3', {}, p.shortName),
-        el('div', { class: 'proj-id' },
-          `${p.id} · ${p.start ?? '?'} → ${p.end ?? '?'}`,
-          p.faRate != null ? ` · F&A ${fmtPct(p.faRate)}${p.faSource === 'inferred' ? ' (est.)' : ''}` : '')),
+      el('h3', {}, p.shortName),
       el('span', { class: 'status-chip' + (active ? '' : ' closed') }, p.status)));
+    // full-width so it can run under the status chip without wrapping
+    card.append(el('div', { class: 'proj-id' },
+      `${p.id} · ${p.start ?? '?'} → ${p.end ?? '?'}`,
+      p.faRate != null ? ` · F&A ${fmtPct(p.faRate)}${p.faSource === 'inferred' ? ' (est.)' : ''}` : ''));
 
     if (tf !== null) {
       const daysLeft = Math.max(0, Math.round((Date.parse(p.end) - Date.parse(DATA.today)) / 86400000));
@@ -717,7 +717,7 @@ function renderPortfolio() {
         }
       }
       barSeries.push({
-        name: 'other', color: 'var(--muted)',
+        name: 'non-personnel', color: 'var(--muted)',
         values: timeline.map((m, i) => {
           if (i >= projStart) return 0;
           const tot = (p.monthly || {})[m] || 0;
@@ -758,7 +758,7 @@ function renderPortfolio() {
     if (active) {
       const ov = CFG.overrides[p.id] || (CFG.overrides[p.id] = {});
       card.append(el('div', { class: 'baseline-ctl' },
-        'New funding beyond the total above: $',
+        'Expected additional funding: $',
         el('input', {
           type: 'number', step: 1000, min: 0, placeholder: '0',
           value: ov.expectedExtra ?? '',
