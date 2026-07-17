@@ -227,6 +227,7 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 svg text { font: 11px system-ui, -apple-system, sans-serif; fill: var(--muted); }
 svg .gridline { stroke: var(--grid); stroke-width: 1; }
 svg .zeroline { stroke: var(--baseline); stroke-width: 1; }
+svg .panel-sep { stroke: var(--muted); stroke-width: 1.5; opacity: 0.55; }
 
 .tooltip {
   position: fixed; z-index: 20; pointer-events: none;

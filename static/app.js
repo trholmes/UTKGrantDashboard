@@ -731,7 +731,7 @@ function renderPortfolio() {
       block.append(summaryChart(timeline, projStart, [
         { name: 'trend', values: trend, dashed: true, endLabel: canProject },
         { name: 'balance', values: actual },
-      ], barSeries, { W: 340, padL: 46, lineH: 84, barH: 44, gap: 14, barMax: sparkMax, maxTicks: 4 }));
+      ], barSeries, { W: 340, padL: 46, lineH: 84, barH: 44, gap: 20, barMax: sparkMax, maxTicks: 4 }));
       card.append(block);
     }
 
@@ -1153,6 +1153,18 @@ function summaryChart(timeline, projStart, lineSeries, barSeries, opts) {
 
   // ---- bottom panel: stacked monthly costs ----
   const barTop = padT + lineH + gap, barBot = barTop + barH;
+
+  // visible divider + panel captions: the y-axis changes scale here
+  const ySep = padT + lineH + gap * 0.45;
+  svg.append(mkLine(4, W - padR, ySep, ySep, 'panel-sep'));
+  const caption = (x, y, anchor, str) => {
+    const t = mkText(x, y, anchor, str);
+    t.setAttribute('font-size', '10');
+    t.setAttribute('font-style', 'italic');
+    svg.append(t);
+  };
+  caption(W - padR, padT + 9, 'end', 'available funds');
+  caption(padL + 2, barTop - 4, 'start', 'monthly spend');
   const stackTot = timeline.map((_, i) => barSeries.reduce((a, s) => a + Math.max(0, s.values[i]), 0));
   const bmax = Math.max(1, barMax, ...stackTot);
   const by = (v) => barBot - v / bmax * barH;
