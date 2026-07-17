@@ -620,10 +620,15 @@ function renderPortfolio() {
     const tbl = el('table', { class: 'cats' },
       el('tr', {}, el('th', {}, 'Category'), el('th', {}, 'Budget'),
         el('th', {}, 'Spent'), el('th', {}, 'Left'), el('th', {})));
+    const CAT_SHORT = {
+      'Salaries & Wages': 'Salaries', 'Fringe Benefits': 'Fringe',
+      'Materials & Supplies': 'Materials', 'Other Direct Costs': 'Other Direct',
+      'Indirect Costs': 'Indirect (F&A)',
+    };
     for (const c of p.categories) {
       const frac = c.budget > 0 ? c.spent / c.budget : (c.spent > 0 ? 1.01 : 0);
       tbl.append(el('tr', {},
-        el('td', {}, c.category),
+        el('td', { title: c.category }, CAT_SHORT[c.category] || c.category),
         el('td', {}, fmtK(c.budget)),
         el('td', {}, fmtK(c.spent)),
         el('td', { class: c.remaining < -0.5 ? 'neg' : '' }, fmtK(c.remaining)),
@@ -654,7 +659,8 @@ function renderPortfolio() {
           el('td', {},
             el('span', {
               class: 'dot',
-              style: `background:${person.faculty ? 'var(--series-5)' : 'var(--series-1)'};margin-right:6px`,
+              style: `background:${personColors.get(person.name) || 'var(--muted)'};margin-right:6px`,
+              title: personColors.has(person.name) ? 'color matches the summary chart' : '',
             }),
             person.name,
             person.faculty ? el('span', { class: 'badge', style: 'margin-left:6px' }, 'PI summer') : null),
@@ -669,30 +675,73 @@ function renderPortfolio() {
         el('div', { class: 'burn-line' }, 'No salaries charged in the export window.')));
     }
 
-    // monthly spending sparkline (shared axes across all cards)
+    // combined figure: balance line (top) over monthly spend by person
+    // (bottom) — same construction as the portfolio summary, shared bar
+    // scale across all cards
     const hasMonthly = Object.keys(p.monthly || {}).length > 0;
-    if (hasMonthly && sparkDomain.length) {
-      const hasFac = sparkDomain.some((m) => Math.abs(((p.monthlyParts || {})[m] || {}).fac || 0) > 0.5);
-      const key = (color, label) => el('span', { class: 'key' },
-        el('span', { class: 'dot', style: `background:${color}` }), label);
+    const burn = p.burn.avg12 ?? p.burn.recent ?? p.burn.linear;
+    const curMonth = DATA.today.slice(0, 7);
+    const endMonth = p.end ? p.end.slice(0, 7) : null;
+    const canProject = active && burn && burn > 0 && endMonth && endMonth > curMonth;
+    if ((hasMonthly && sparkDomain.length) || canProject) {
+      const histMonths = sparkDomain.length
+        ? monthRange(sparkDomain[0], curMonth) : [curMonth];
+      const projMonths = canProject ? monthRange(monthAdd(curMonth, 1), endMonth) : [];
+      const timeline = histMonths.concat(projMonths);
+      const projStart = histMonths.length;
+
+      // actual balance walked backwards from today
+      const balNow = p.totals.remaining - p.totals.committed;
+      const balBy = { [curMonth]: balNow };
+      let bal = balNow, cursor = curMonth;
+      for (const m of histMonths.filter((mm) => mm < curMonth).reverse()) {
+        bal += (p.monthly || {})[cursor] || 0;
+        balBy[m] = bal; cursor = m;
+      }
+      const actual = timeline.map((m, i) => (i < projStart ? balBy[m] : null));
+      const trend = timeline.map((m) =>
+        (canProject && m >= curMonth ? balNow - burn * monthDiff(curMonth, m) : null));
+
+      // per-person history on this award, colored like the summary
+      const fa = (CFG.overrides[p.id] || {}).faRate ?? p.faRate ?? 0;
+      const cfgByName = new Map(CFG.people.map((cp) => [cp.name, cp]));
+      const barSeries = [];
+      for (const d of DATA.people) {
+        const hist = (d.salaryByProject || {})[p.id];
+        if (!hist) continue;
+        const fr = ((cfgByName.get(d.name) || d).fringeRate) || 0;
+        const values = timeline.map((m, i) =>
+          (i < projStart ? (hist[m] || 0) * (1 + fr) * (1 + fa) : 0));
+        if (values.some((v) => v > 1)) {
+          barSeries.push({ name: d.name, color: personColors.get(d.name) || 'var(--ink-2)', values });
+        }
+      }
+      barSeries.push({
+        name: 'other', color: 'var(--muted)',
+        values: timeline.map((m, i) => {
+          if (i >= projStart) return 0;
+          const tot = (p.monthly || {})[m] || 0;
+          return Math.max(0, tot - barSeries.reduce((a, s) => a + s.values[i], 0));
+        }),
+      });
+
       const block = el('div', { class: 'spark-block' },
-        el('div', { class: 'spark-title' }, 'Monthly spend (detail export)'));
-      block.append(barSpark(p.monthlyParts || {}, sparkDomain, sparkMax));
-      block.append(el('div', { class: 'mini-legend' },
-        key('var(--series-1)', 'personnel'),
-        hasFac ? key('var(--series-5)', 'PI summer salary') : null,
-        key('var(--series-2)', 'all other costs')));
+        el('div', { class: 'spark-title' },
+          'Balance & monthly spend' + (canProject ? ' — trend to award end' : '')));
+      block.append(summaryChart(timeline, projStart, [
+        { name: 'trend', values: trend, dashed: true, endLabel: canProject },
+        { name: 'balance', values: actual },
+      ], barSeries, { W: 340, padL: 46, lineH: 84, barH: 44, gap: 14, barMax: sparkMax, maxTicks: 4 }));
       card.append(block);
     }
 
     // burn / runway line
-    const burn = p.burn.avg12 ?? p.burn.recent ?? p.burn.linear;
     if (active && burn && burn > 0) {
       const src = p.burn.avg12 != null ? '12-mo avg'
         : p.burn.recent != null ? `avg of ${p.burn.recentMonths.map(fmtMonth).join(', ')}`
         : 'linear average over the award';
       const runway = p.totals.remaining / burn;
-      const monthsLeft = p.end ? monthDiff(DATA.today.slice(0, 7), p.end.slice(0, 7)) : null;
+      const monthsLeft = p.end ? monthDiff(curMonth, p.end.slice(0, 7)) : null;
       let runTxt = `runway ≈ ${runway.toFixed(0)} mo`;
       if (monthsLeft !== null) runTxt += ` (award has ${monthsLeft} mo left)`;
       const extra = (p.burn.avg12 != null && p.burn.recent != null)
@@ -702,44 +751,6 @@ function renderPortfolio() {
     } else if (active && !hasMonthly) {
       card.append(el('div', { class: 'burn-line' },
         'No transaction detail loaded for this award — add an expenditure detail export (RPT…) for real burn rates.'));
-    }
-
-    // balance history (reconstructed from transactions) with the burn trend
-    // superimposed and continued to the end of the award
-    if (active && burn && burn > 0 && p.end) {
-      const curMonth = DATA.today.slice(0, 7);
-      const endMonth = p.end.slice(0, 7);
-      if (endMonth > curMonth) {
-        const balNow = p.totals.remaining - p.totals.committed;
-        const histKeys = Object.keys(p.monthly || {}).sort().filter((m) => m <= curMonth);
-        const startMonth = histKeys.length ? histKeys[0] : curMonth;
-        const timeline = monthRange(startMonth, endMonth);
-
-        // walk backwards from today's balance, adding back each month's spend
-        const balByMonth = { [curMonth]: balNow };
-        let bal = balNow, cursor = curMonth;
-        for (const m of timeline.filter((mm) => mm < curMonth).reverse()) {
-          bal += (p.monthly || {})[cursor] || 0;
-          balByMonth[m] = bal;
-          cursor = m;
-        }
-
-        const actual = timeline.map((m) => (m <= curMonth ? balByMonth[m] : null));
-        // trend continues from today's balance; not drawn over the past
-        const trend = timeline.map((m) =>
-          (m >= curMonth ? balNow - burn * monthDiff(curMonth, m) : null));
-
-        const block = el('div', { class: 'spark-block' },
-          el('div', { class: 'spark-title' }, `Balance: history and trend to award end (${fmt$(burn)}/mo)`));
-        block.append(lineChart(timeline, [
-          { name: 'trend', values: trend, dashed: true, endLabel: true },
-          { name: 'actual balance', values: actual },
-        ], { W: 340, H: 120, padL: 46 }));
-        block.append(el('div', { class: 'mini-legend' },
-          el('span', { class: 'key' }, el('span', { class: 'swatch' }), 'actual balance'),
-          el('span', { class: 'key' }, el('span', { class: 'swatch dashed' }), 'trend → award end')));
-        card.append(block);
-      }
     }
 
     // manually entered future funding (persists in config.json; feeds the
@@ -763,85 +774,6 @@ function renderPortfolio() {
 
     grid.append(card);
   }
-}
-
-const SPARK_SEGMENTS = [
-  ['personnel', 'var(--series-1)', 'personnel'],
-  ['fac', 'var(--series-5)', 'PI summer salary'],
-  ['other', 'var(--series-2)', 'other'],
-];
-
-function barSpark(monthlyParts, domain, maxV) {
-  // domain and maxV are shared across all cards so the sparklines compare.
-  const W = 340, H = 48, pad = 2;
-  const NS = 'http://www.w3.org/2000/svg';
-  const anyNeg = domain.some((k) => {
-    const p = monthlyParts[k];
-    return p && SPARK_SEGMENTS.some(([f]) => (p[f] || 0) < 0);
-  });
-  const zero = anyNeg ? H * 0.7 : H;
-  const slot = (W - pad * 2) / domain.length;
-  const bw = Math.max(2, slot - 2);
-
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', `0 0 ${W} ${H + 14}`);
-  svg.setAttribute('width', '100%');
-  svg.style.display = 'block';
-
-  const rect = (x, y, w, h, fill) => {
-    const r = document.createElementNS(NS, 'rect');
-    r.setAttribute('x', x); r.setAttribute('y', y);
-    r.setAttribute('width', w); r.setAttribute('height', h);
-    r.setAttribute('rx', 1);
-    r.setAttribute('fill', fill);
-    return r;
-  };
-
-  domain.forEach((k, i) => {
-    const raw = monthlyParts[k];
-    if (!raw) return;
-    // fees display inside "all other costs" on the bars; they are tracked
-    // separately only so projections can retire them with their person
-    const parts = {
-      fac: raw.fac || 0,
-      personnel: raw.personnel || 0,
-      other: (raw.other || 0) + (raw.fees || 0),
-    };
-    const total = parts.fac + parts.personnel + parts.other;
-    const x = pad + i * slot;
-    const tip = (e) => {
-      const bits = SPARK_SEGMENTS
-        .filter(([f]) => Math.abs(parts[f] || 0) > 0.5)
-        .map(([f, , label]) => `${label} ${fmt$(parts[f])}`);
-      showTip(`${fmtMonth(k)}: ${fmt$(total)}` + (bits.length ? ` — ${bits.join(' · ')}` : ''),
-        e.clientX, e.clientY);
-    };
-    // stack positive segments up from the baseline, negative ones down
-    let up = zero, down = zero;
-    for (const [field, color] of SPARK_SEGMENTS) {
-      const v = parts[field] || 0;
-      if (Math.abs(v) < 0.5) continue;
-      const h = Math.max(1, Math.abs(v) / maxV * (zero - 4));
-      let yTop;
-      if (v >= 0) { yTop = up - h; up = yTop; }
-      else { yTop = down; down += h; }
-      const r = rect(x, yTop, bw, h, color);
-      r.addEventListener('mousemove', tip);
-      r.addEventListener('mouseleave', hideTip);
-      svg.append(r);
-    }
-  });
-
-  const label = (x, anchor, text) => {
-    const t = document.createElementNS(NS, 'text');
-    t.setAttribute('x', x); t.setAttribute('y', H + 11);
-    t.setAttribute('text-anchor', anchor);
-    t.textContent = text;
-    return t;
-  };
-  svg.append(label(pad, 'start', fmtMonth(domain[0])),
-             label(W - pad, 'end', fmtMonth(domain[domain.length - 1])));
-  return svg;
 }
 
 /* ----- people ----- */
@@ -1152,9 +1084,10 @@ function renderSim() {
 
 /* ----- portfolio summary figure: balance line over stacked cost bars ----- */
 
-function summaryChart(timeline, projStart, lineSeries, barSeries) {
-  const W = 960, padL = 56, padR = 14, padT = 8;
-  const lineH = 150, gap = 24, barH = 88, xLabH = 18;
+function summaryChart(timeline, projStart, lineSeries, barSeries, opts) {
+  const { W = 960, padL = 56, lineH = 150, barH = 88, gap = 24,
+          barMax = 0, maxTicks = 7 } = opts || {};
+  const padR = 14, padT = 8, xLabH = 18;
   const H = padT + lineH + gap + barH + xLabH;
   const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
@@ -1221,7 +1154,7 @@ function summaryChart(timeline, projStart, lineSeries, barSeries) {
   // ---- bottom panel: stacked monthly costs ----
   const barTop = padT + lineH + gap, barBot = barTop + barH;
   const stackTot = timeline.map((_, i) => barSeries.reduce((a, s) => a + Math.max(0, s.values[i]), 0));
-  const bmax = Math.max(1, ...stackTot);
+  const bmax = Math.max(1, barMax, ...stackTot);
   const by = (v) => barBot - v / bmax * barH;
   const bstep = niceStep(bmax / 2);
   for (let v = 0; v <= bmax + 1; v += bstep) {
@@ -1247,7 +1180,7 @@ function summaryChart(timeline, projStart, lineSeries, barSeries) {
   });
 
   // ---- shared x labels ----
-  const every = Math.max(1, Math.ceil(timeline.length / 7));
+  const every = Math.max(1, Math.ceil(timeline.length / maxTicks));
   timeline.forEach((m, i) => {
     if (i % every !== 0 && i !== timeline.length - 1) return;
     if (i !== timeline.length - 1 && timeline.length - 1 - i < every) return;
