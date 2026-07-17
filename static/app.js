@@ -194,10 +194,11 @@ function renderSummary() {
       team.push({ person, det });
     }
   }
-  // salary + fringe only: student fees and F&A already flow through the
-  // "other spending" trend below (they are non-labor lines in the history),
-  // so adding them here would double-count them. Expected end dates and
-  // scheduled pay changes from the People table apply month by month.
+  // salary + fringe + the person's fees/tuition (smoothed to /12). Fees are
+  // tracked as their own component server-side and EXCLUDED from the
+  // "other spending" trend below, so they retire with their person here
+  // and are never double-counted. F&A stays in the other trend. Expected
+  // end dates and scheduled pay changes apply month by month.
   const salaryAt = (person, m) => {
     if (person.payChangeMonth && person.payChangeSalary != null
         && m >= person.payChangeMonth) {
@@ -211,7 +212,9 @@ function renderSummary() {
     for (const { person, det } of team) {
       if (person.endMonth && m > person.endMonth) continue;
       const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0));
+      const fees = (person.annualFees || 0) / 12;
       if (!det.facultySalary || (det.paidMonthNums || []).includes(mm)) sum += loaded;
+      sum += fees;
     }
     return sum;
   };
@@ -272,11 +275,14 @@ function renderSummary() {
   }
 
   // team cost decomposition: year-round people vs. PI/faculty summer salary
-  const loadedOf = (t) => (t.person.monthlySalary || 0) * (1 + (t.person.fringeRate || 0));
+  const costOf = (t) => (t.person.monthlySalary || 0) * (1 + (t.person.fringeRate || 0))
+    + (t.person.annualFees || 0) / 12;
   const yearRound = team.filter((t) => !t.det.facultySalary);
   const summerFolk = team.filter((t) => t.det.facultySalary);
-  const baseMonthly = yearRound.reduce((a, t) => a + loadedOf(t), 0);
-  const peakMonthly = baseMonthly + summerFolk.reduce((a, t) => a + loadedOf(t), 0);
+  const baseMonthly = yearRound.reduce((a, t) => a + costOf(t), 0)
+    + summerFolk.reduce((a, t) => a + (t.person.annualFees || 0) / 12, 0);
+  const peakMonthly = baseMonthly + summerFolk.reduce((a, t) =>
+    a + (t.person.monthlySalary || 0) * (1 + (t.person.fringeRate || 0)), 0);
   const summerMonths = [...new Set(summerFolk.flatMap((t) => t.det.paidMonthNums || []))]
     .sort((a, b) => a - b).map((n) => MONTH_NAMES[n - 1]).join('/');
 
@@ -296,14 +302,14 @@ function renderSummary() {
       (extraTotal > 0 ? `+ ${fmt$(extraTotal)} expected (entered manually) · ` : '')
         + (expired > 0 ? `${fmt$(expired)} expires unspent at this pace` : 'across all active awards')),
     stat('Current team', fmt$(baseMonthly) + '/mo',
-      `${yearRound.length} people year-round, salary+fringe`
+      `${yearRound.length} people year-round, salary+fringe+fees`
         + (summerFolk.length
           ? ` · ${fmt$(peakMonthly)}/mo in ${summerMonths} (${summerFolk.map((t) => t.person.name).join(', ')} summer salary)`
           : '')
         + (team.some((t) => t.person.endMonth || t.person.payChangeMonth)
           ? ' · scheduled departures/pay changes applied' : '')),
     stat('Other spending', fmt$(otherTrend) + '/mo',
-      '12-mo trend: F&A, fees, travel, supplies, …'),
+      '12-mo trend: F&A, travel, supplies, … (fees count with their person)'),
     stat('Funded through', fmtMonth(fundedThrough),
       runsOut === null
         ? 'to the end of your last award'
@@ -401,7 +407,7 @@ function renderPortfolio() {
     for (const m of sparkDomain) {
       const parts = (p.monthlyParts || {})[m];
       if (!parts) continue;
-      const vals = [parts.fac || 0, parts.personnel || 0, parts.other || 0];
+      const vals = [parts.fac || 0, parts.personnel || 0, (parts.other || 0) + (parts.fees || 0)];
       const pos = vals.filter((v) => v > 0).reduce((a, b) => a + b, 0);
       const neg = -vals.filter((v) => v < 0).reduce((a, b) => a + b, 0);
       sparkMax = Math.max(sparkMax, pos, neg);
@@ -613,9 +619,16 @@ function barSpark(monthlyParts, domain, maxV) {
   };
 
   domain.forEach((k, i) => {
-    const parts = monthlyParts[k];
-    if (!parts) return;
-    const total = (parts.fac || 0) + (parts.personnel || 0) + (parts.other || 0);
+    const raw = monthlyParts[k];
+    if (!raw) return;
+    // fees display inside "all other costs" on the bars; they are tracked
+    // separately only so projections can retire them with their person
+    const parts = {
+      fac: raw.fac || 0,
+      personnel: raw.personnel || 0,
+      other: (raw.other || 0) + (raw.fees || 0),
+    };
+    const total = parts.fac + parts.personnel + parts.other;
     const x = pad + i * slot;
     const tip = (e) => {
       const bits = SPARK_SEGMENTS

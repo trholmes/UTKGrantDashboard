@@ -492,10 +492,12 @@ def _build_payload_uncached(data_dir):
 
     transactions = list(labor.values()) + list(nonlabor.values())
 
-    # transaction aggregates per project, split three ways:
+    # transaction aggregates per project, split four ways:
     #   fac       — faculty (PI summer) salary and its fringe
     #   personnel — all other salaries and fringe
-    #   other     — every non-labor cost (travel, fees, indirect, ...)
+    #   fees      — student fees / tuition (person-linked, so projections
+    #               can retire them with the person)
+    #   other     — every remaining non-labor cost (travel, indirect, ...)
     faculty_people = {t["person"] for t in transactions
                       if t["kind"] == "labor" and t["person"]
                       and "faculty" in t["type"].lower()}
@@ -509,7 +511,7 @@ def _build_payload_uncached(data_dir):
         bym = monthly.setdefault(t["project"], {})
         bym[m] = bym.get(m, 0.0) + t["amount"]
         parts = monthly_parts.setdefault(t["project"], {}).setdefault(
-            m, {"fac": 0.0, "personnel": 0.0, "other": 0.0})
+            m, {"fac": 0.0, "personnel": 0.0, "fees": 0.0, "other": 0.0})
         if t["kind"] == "labor":
             ty = t["type"].lower()
             is_fringe = "fringe" in ty
@@ -519,7 +521,8 @@ def _build_payload_uncached(data_dir):
                 bymp = proj_people.setdefault(t["project"], {}).setdefault(t["person"], {})
                 bymp[m] = bymp.get(m, 0.0) + t["amount"]
         else:
-            parts["other"] += t["amount"]
+            ty = t["type"].lower()
+            parts["fees" if ("fee" in ty or "tuition" in ty) else "other"] += t["amount"]
 
     # project names conventionally end with the PI surname; collect surnames
     # so display names can drop them ("DOE DE-SC0020267 Holmes" -> "DOE DE-SC0020267")
