@@ -249,12 +249,17 @@ function renderSummary() {
     const parts = p.monthlyParts || {};
     const keys = Object.keys(parts).filter((m) => m < curMonth).sort();
     if (keys.length) {
+      // average over calendar months (quiet months count as zero),
+      // anchored at the last complete month
+      const lastComplete = monthAdd(curMonth, -1);
       const window = [];
       for (let i = 0; i < 12; i++) {
-        const m = monthAdd(keys[keys.length - 1], -i);
+        const m = monthAdd(lastComplete, -i);
         if (m >= keys[0]) window.push(m);
       }
-      otherTrend += window.reduce((a, m) => a + ((parts[m] || {}).other || 0), 0) / window.length;
+      if (window.length) {
+        otherTrend += window.reduce((a, m) => a + ((parts[m] || {}).other || 0), 0) / window.length;
+      }
     } else {
       otherTrend += p.burn.avg12 ?? p.burn.linear ?? 0;
     }

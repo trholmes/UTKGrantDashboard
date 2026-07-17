@@ -568,19 +568,28 @@ def _build_payload_uncached(data_dir):
                 fa_rate = round(indirect_budget / direct_budget, 4)
                 fa_source = "inferred"
 
-        # burn rates: last-3-active-months average (current staffing level),
-        # 12-month average (captures seasonality like summer salary), and a
-        # linear whole-award average as the fallback.
+        # burn rates averaged over CALENDAR months — quiet months count as
+        # zero, so lumpy/quarterly billing isn't overstated. Windows are
+        # anchored at the last complete month inside the export's coverage
+        # and never reach back before the coverage (or award) start.
         bym = monthly.get(pid, {})
-        complete = [(m, v) for m, v in sorted(bym.items())
-                    if m < this_month and abs(v) > 1]
-        recent3 = complete[-3:]
-        recent_burn = (sum(v for _, v in recent3) / len(recent3)) if recent3 else None
+        recent_burn = None
         avg12 = None
-        if complete:
-            last, first = complete[-1][0], complete[0][0]
-            window = [mo for mo in (month_add(last, -i) for i in range(12)) if mo >= first]
-            avg12 = sum(bym.get(mo, 0.0) for mo in window) / len(window)
+        recent_months = []
+        if bym:
+            windows = dmeta.get("windows") or set()
+            cov_start = min(w[0] for w in windows)[:7] if windows else min(bym)
+            cov_end = max(w[1] for w in windows)[:7] if windows else max(bym)
+            floor = max(cov_start, start[:7]) if start else cov_start
+            last_complete = min(month_add(this_month, -1), cov_end)
+            if floor <= last_complete:
+                w3 = [m for m in (month_add(last_complete, -i) for i in range(3))
+                      if m >= floor]
+                recent_months = sorted(w3)
+                recent_burn = sum(bym.get(m, 0.0) for m in w3) / len(w3)
+                w12 = [m for m in (month_add(last_complete, -i) for i in range(12))
+                       if m >= floor]
+                avg12 = sum(bym.get(m, 0.0) for m in w12) / len(w12)
         linear_burn = None
         if start and totals["spent"] > 0:
             elapsed = months_between(start, today_iso)
@@ -604,7 +613,7 @@ def _build_payload_uncached(data_dir):
             "personnel": project_personnel(proj_people.get(pid, {}), faculty_people),
             "burn": {
                 "recent": round(recent_burn, 2) if recent_burn is not None else None,
-                "recentMonths": [m for m, _ in recent3],
+                "recentMonths": recent_months,
                 "avg12": round(avg12, 2) if avg12 is not None else None,
                 "linear": round(linear_burn, 2) if linear_burn is not None else None,
             },
