@@ -680,11 +680,17 @@ function renderPortfolio() {
     const burn = p.burn.avg12 ?? p.burn.recent ?? p.burn.linear;
     const curMonth = DATA.today.slice(0, 7);
     const endMonth = p.end ? p.end.slice(0, 7) : null;
-    const canProject = active && endMonth && endMonth > curMonth && cardModel;
+    // an expected extension (NCE / new money) stretches the projection to
+    // the new end and adds the funds, mirroring the summary's treatment
+    const ov = CFG.overrides[p.id] || (CFG.overrides[p.id] = {});
+    const extra = active ? (ov.expectedExtra || 0) : 0;
+    let effEnd = endMonth;
+    if (active && endMonth && ov.expectedEnd && ov.expectedEnd > endMonth) effEnd = ov.expectedEnd;
+    const canProject = active && effEnd && effEnd > curMonth && cardModel;
     if ((hasMonthly && sparkDomain.length) || canProject) {
       const histMonths = sparkDomain.length
         ? monthRange(sparkDomain[0], curMonth) : [curMonth];
-      const projMonths = canProject ? monthRange(monthAdd(curMonth, 1), endMonth) : [];
+      const projMonths = canProject ? monthRange(monthAdd(curMonth, 1), effEnd) : [];
       const timeline = histMonths.concat(projMonths);
       const projStart = histMonths.length;
 
@@ -736,8 +742,9 @@ function renderPortfolio() {
         }),
       });
 
-      // projection line integrates exactly what the bars show
-      let balProj = balNow;
+      // projection line integrates exactly what the bars show; expected
+      // additional funding arrives as a step at "now", like the summary
+      let balProj = balNow + extra;
       const trend = timeline.map((m, i) => {
         if (!canProject) return null;
         if (i === projStart - 1) return balNow;  // join at "now"
@@ -746,9 +753,11 @@ function renderPortfolio() {
         return balProj;
       });
 
+      const hasExpected = canProject && (extra > 0 || effEnd !== endMonth);
       const block = el('div', { class: 'spark-block' },
         el('div', { class: 'spark-title' },
-          'Balance & monthly spend' + (canProject ? ' — projected to award end' : '')));
+          'Balance & monthly spend'
+          + (canProject ? ` — projected to ${hasExpected ? 'expected end (incl. new funding)' : 'award end'}` : '')));
       block.append(summaryChart(timeline, projStart, [
         { name: 'projected', values: trend, dashed: true, endLabel: canProject },
         { name: 'balance', values: actual },
@@ -806,7 +815,11 @@ function renderPortfolio() {
     // manually entered future funding (persists in config.json; feeds the
     // portfolio summary's funded-through projection)
     if (active) {
-      const ov = CFG.overrides[p.id] || (CFG.overrides[p.id] = {});
+      const endInput = monthInput(ov.expectedEnd,
+        (v) => { ov.expectedEnd = v; save(); renderSummary(); });
+      // redraw the card chart once the user leaves the field (re-rendering
+      // per keystroke would steal focus from these very inputs)
+      endInput.addEventListener('blur', () => renderPortfolio());
       card.append(el('div', { class: 'baseline-ctl' },
         'Expected additional funding: $',
         el('input', {
@@ -817,9 +830,10 @@ function renderPortfolio() {
             ov.expectedExtra = isNaN(v) || v <= 0 ? null : v;
             save(); renderSummary();
           },
+          onblur: () => renderPortfolio(),
         }),
         el('span', { class: 'sep' }, 'new end'),
-        monthInput(ov.expectedEnd, (v) => { ov.expectedEnd = v; save(); renderSummary(); })));
+        endInput));
     }
 
     grid.append(card);
