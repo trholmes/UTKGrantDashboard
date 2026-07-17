@@ -330,7 +330,12 @@ function renderSummary() {
     return net / window.length;
   };
   let otherTrend = 0;
-  for (const p of active) otherTrend += projectOtherTrend(p);
+  const otherBreakdown = [];
+  for (const p of active) {
+    const v = projectOtherTrend(p);
+    otherTrend += v;
+    otherBreakdown.push(`${p.shortName}: ${fmt$(v)}/mo`);
+  }
 
   // one person's monthly cost attributable to ONE award — the same rules
   // the summary uses, so card projections agree with the portfolio view
@@ -429,8 +434,12 @@ function renderSummary() {
           : '')
         + (team.some((t) => t.person.endMonth || t.person.payChangeMonth)
           ? ' · scheduled departures/pay changes applied' : '')),
-    stat('Other spending', fmt$(otherTrend) + '/mo',
-      '12-mo trend: travel, supplies, F&A on non-salary costs — personnel F&A and fees count with each person'),
+    (() => {
+      const s = stat('Other spending', fmt$(otherTrend) + '/mo',
+        '12-mo trend: travel, supplies, F&A on non-salary costs — personnel F&A and fees count with each person (hover for per-award breakdown)');
+      s.title = otherBreakdown.join('\n');
+      return s;
+    })(),
     stat('Funded through', fmtMonth(fundedThrough),
       runsOut === null
         ? 'to the end of your last award'
