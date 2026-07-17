@@ -354,7 +354,10 @@ function renderSummary() {
   // month-by-month projection: spend from the soonest-ending award first;
   // an award's leftover balance disappears when it ends. Manually entered
   // "expected additional funding" (with its new end date) joins the pool —
-  // an extended end also lets the existing balance carry forward.
+  // an extended end also lets the existing balance carry forward. The
+  // CURRENT month is projected, not treated as actuals (its data is
+  // incomplete), so each pool starts from the last complete month's
+  // balance: today's balance plus the partial spend added back.
   let extraTotal = 0;
   const pools = active
     .map((p) => {
@@ -363,11 +366,12 @@ function renderSummary() {
       extraTotal += extra;
       let end = p.end.slice(0, 7);
       if (ov.expectedEnd && ov.expectedEnd > end) end = ov.expectedEnd;
-      return { end, bal: Math.max(0, p.totals.remaining - p.totals.committed) + extra };
+      const partial = (p.monthly || {})[curMonth] || 0;
+      return { end, bal: Math.max(0, p.totals.remaining - p.totals.committed + partial) + extra };
     })
     .sort((a, b) => (a.end < b.end ? -1 : 1));
   const horizon = pools[pools.length - 1].end;
-  const months = monthRange(monthAdd(curMonth, 1), horizon);
+  const months = monthRange(curMonth, horizon);
   const series = [];
   let runsOut = null, expired = 0, unmet = 0;
   for (const m of months) {
@@ -436,11 +440,14 @@ function renderSummary() {
   // ground the projection with reconstructed history: total available funds
   // over the last ~18 months, rebuilt backwards from today's balances the
   // same way the per-award charts are
+  // history stops at the last COMPLETE month; the current (partial) month
+  // belongs to the projection
   let histMonths = [];
+  const lastComplete = monthAdd(curMonth, -1);
   const detailMonths = [...new Set(active.flatMap((p) =>
-    Object.keys(p.monthly || {}).filter((m) => m <= curMonth)))].sort();
-  if (detailMonths.length) {
-    histMonths = monthRange(detailMonths[0], curMonth).slice(-18);
+    Object.keys(p.monthly || {}).filter((m) => m < curMonth)))].sort();
+  if (detailMonths.length && detailMonths[0] <= lastComplete) {
+    histMonths = monthRange(detailMonths[0], lastComplete).slice(-18);
   }
   const histTotals = histMonths.map(() => 0);
   for (const p of active) {
@@ -466,7 +473,8 @@ function renderSummary() {
   const actualSeries = timeline.map((m, i) => (i < histMonths.length ? histTotals[i] : null));
   const projSeries = timeline.map((m, i) => {
     if (i < histMonths.length - 1) return null;
-    if (i === histMonths.length - 1) return available;  // join at "now"
+    // join at the last complete month's actual balance
+    if (i === histMonths.length - 1) return histTotals[histMonths.length - 1];
     return series[i - histMonths.length];
   });
 
@@ -688,9 +696,11 @@ function renderPortfolio() {
     if (active && endMonth && ov.expectedEnd && ov.expectedEnd > endMonth) effEnd = ov.expectedEnd;
     const canProject = active && effEnd && effEnd > curMonth && cardModel;
     if ((hasMonthly && sparkDomain.length) || canProject) {
-      const histMonths = sparkDomain.length
-        ? monthRange(sparkDomain[0], curMonth) : [curMonth];
-      const projMonths = canProject ? monthRange(monthAdd(curMonth, 1), effEnd) : [];
+      // when projecting, the current (partial) month is modeled rather than
+      // shown as actuals; history ends at the last complete month
+      const histEnd = canProject ? monthAdd(curMonth, -1) : curMonth;
+      const histMonths = sparkDomain.length ? monthRange(sparkDomain[0], histEnd) : [];
+      const projMonths = canProject ? monthRange(curMonth, effEnd) : [];
       const timeline = histMonths.concat(projMonths);
       const projStart = histMonths.length;
 
@@ -742,12 +752,15 @@ function renderPortfolio() {
         }),
       });
 
-      // projection line integrates exactly what the bars show; expected
-      // additional funding arrives as a step at "now", like the summary
-      let balProj = balNow + extra;
+      // projection line integrates exactly what the bars show, anchored at
+      // the last complete month's balance (today's balance plus the current
+      // month's partial spend added back — the full month is then modeled);
+      // expected additional funding arrives as a step, like the summary
+      const balAnchor = balNow + ((p.monthly || {})[curMonth] || 0);
+      let balProj = balAnchor + extra;
       const trend = timeline.map((m, i) => {
         if (!canProject) return null;
-        if (i === projStart - 1) return balNow;  // join at "now"
+        if (i === projStart - 1) return balAnchor;  // join at last complete month
         if (i < projStart) return null;
         balProj -= barSeries.reduce((a, s) => a + s.values[i], 0);
         return balProj;
