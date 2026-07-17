@@ -1154,9 +1154,13 @@ function summaryChart(timeline, projStart, lineSeries, barSeries, opts) {
   // ---- bottom panel: stacked monthly costs ----
   const barTop = padT + lineH + gap, barBot = barTop + barH;
 
-  // visible divider + panel captions: the y-axis changes scale here
-  const ySep = padT + lineH + gap * 0.45;
-  svg.append(mkLine(4, W - padR, ySep, ySep, 'panel-sep'));
+  // broken y-axis: one vertical axis segment per panel with break marks
+  // between them, signalling that the scale changes
+  svg.append(mkLine(padL, padL, padT, padT + lineH, 'axis'));
+  svg.append(mkLine(padL, padL, barTop, barBot, 'axis'));
+  const breakMark = (y) => svg.append(mkLine(padL - 4, padL + 4, y + 3, y - 3, 'axis'));
+  breakMark(padT + lineH);
+  breakMark(barTop);
   const caption = (x, y, anchor, str) => {
     const t = mkText(x, y, anchor, str);
     t.setAttribute('font-size', '10');
