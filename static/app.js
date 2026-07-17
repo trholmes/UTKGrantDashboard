@@ -658,33 +658,6 @@ function renderPortfolio() {
       el('td', {})));
     card.append(tbl);
 
-    // who's on this grant (salary lines from the detail export)
-    if ((p.personnel || []).length) {
-      const curMonth = DATA.today.slice(0, 7);
-      const section = el('div', { class: 'spark-block' },
-        el('div', { class: 'spark-title' }, "Who's on this grant"));
-      const tbl = el('table', { class: 'cats' });
-      for (const person of p.personnel) {
-        const stale = monthDiff(person.lastPaid, curMonth) > 2;
-        tbl.append(el('tr', { class: stale ? 'stale' : '' },
-          el('td', {},
-            el('span', {
-              class: 'dot',
-              style: `background:${personColors.get(person.name) || 'var(--muted)'};margin-right:6px`,
-              title: personColors.has(person.name) ? 'color matches the summary chart' : '',
-            }),
-            person.name,
-            person.faculty ? el('span', { class: 'badge', style: 'margin-left:6px' }, 'PI summer') : null),
-          el('td', {}, stale ? '—' : fmt$(person.monthly) + '/mo'),
-          el('td', { class: 'muted-cell' }, 'last paid ' + fmtMonth(person.lastPaid))));
-      }
-      section.append(tbl);
-      card.append(section);
-    } else if (p.hasDetail) {
-      card.append(el('div', { class: 'spark-block' },
-        el('div', { class: 'spark-title' }, "Who's on this grant"),
-        el('div', { class: 'burn-line' }, 'No salaries charged in the export window.')));
-    }
 
     // combined figure: balance line (top) over monthly spend by person
     // (bottom) — same construction as the portfolio summary, shared bar
@@ -762,6 +735,35 @@ function renderPortfolio() {
     } else if (active && !hasMonthly) {
       card.append(el('div', { class: 'burn-line' },
         'No transaction detail loaded for this award — add an expenditure detail export (RPT…) for real burn rates.'));
+    }
+
+    
+    // who's on this grant (salary lines from the detail export)
+    if ((p.personnel || []).length) {
+      const curMonth = DATA.today.slice(0, 7);
+      const section = el('div', { class: 'spark-block' },
+        el('div', { class: 'spark-title' }, "Who's on this grant"));
+      const tbl = el('table', { class: 'cats' });
+      for (const person of p.personnel) {
+        const stale = monthDiff(person.lastPaid, curMonth) > 2;
+        tbl.append(el('tr', { class: stale ? 'stale' : '' },
+          el('td', {},
+            el('span', {
+              class: 'dot',
+              style: `background:${personColors.get(person.name) || 'var(--muted)'};margin-right:6px`,
+              title: personColors.has(person.name) ? 'color matches the summary chart' : '',
+            }),
+            person.name,
+            person.faculty ? el('span', { class: 'badge', style: 'margin-left:6px' }, 'PI summer') : null),
+          el('td', {}, stale ? '—' : fmt$(person.monthly) + '/mo'),
+          el('td', { class: 'muted-cell' }, 'last paid ' + fmtMonth(person.lastPaid))));
+      }
+      section.append(tbl);
+      card.append(section);
+    } else if (p.hasDetail) {
+      card.append(el('div', { class: 'spark-block' },
+        el('div', { class: 'spark-title' }, "Who's on this grant"),
+        el('div', { class: 'burn-line' }, 'No salaries charged in the export window.')));
     }
 
     // manually entered future funding (persists in config.json; feeds the
