@@ -6,6 +6,7 @@
 let DATA = null;   // payload from /api/data
 let CFG = null;    // { people:[], assignments:[], overrides:{} }
 let saveTimer = null;
+let personColors = new Map();  // name -> color, assigned by the summary chart
 
 /* ---------- tiny DOM + format helpers ---------- */
 
@@ -426,6 +427,10 @@ function renderSummary() {
       values: timeline.map((_, i) => rest.reduce((a, p) => a + p.values[i], 0)),
     });
   }
+  // publish the color assignment so the People table can match it
+  personColors = new Map();
+  persons.slice(0, PERSON_COLORS.length).forEach((p, i) => personColors.set(p.name, PERSON_COLORS[i]));
+  rest.forEach((p) => personColors.set(p.name, 'var(--series-4)'));
   barSeries.push({
     name: 'not tied to a person', color: 'var(--muted)',
     values: timeline.map((m, i) => {
@@ -818,11 +823,14 @@ function renderPeople() {
         }),
         el('span', {
           class: 'dot',
-          style: `background:var(--series-${det && det.facultySalary ? 5 : 1});margin-left:5px`,
-          title: det && det.facultySalary
-            ? 'faculty summer salary — only charged '
-              + (det.paidMonthNums || []).map((n) => MONTH_NAMES[n - 1]).join('/')
-            : 'year-round personnel',
+          style: `background:${personColors.get(person.name) || 'var(--muted)'};margin-left:5px`,
+          title: (personColors.has(person.name)
+            ? 'color matches this person in the summary chart'
+            : 'gray: not part of the summary projection (no recent payroll match)')
+            + (det && det.facultySalary
+              ? ' — faculty summer salary, only charged '
+                + (det.paidMonthNums || []).map((n) => MONTH_NAMES[n - 1]).join('/')
+              : ''),
         }),
         person.source !== 'payroll' ? el('span', { class: 'badge', style: 'margin-left:5px' }, 'manual') : null),
       el('td', { class: 'num' }, numIn('monthlySalary', 0, 50)),
@@ -861,7 +869,7 @@ function renderPeople() {
         onclick: () => {
           CFG.people = CFG.people.filter((p) => p !== person);
           CFG.assignments = CFG.assignments.filter((a) => a.personId !== person.id);
-          save(); renderPeople(); renderAssignments(); renderSim(); renderSummary();
+          save(); renderSummary(); renderPeople(); renderAssignments(); renderSim();
         },
       }, '✕'))));
   }
