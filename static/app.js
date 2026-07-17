@@ -266,8 +266,8 @@ function renderSummary() {
   };
 
   // current team = people with a salary in the last 2 months of detail data,
-  // minus anyone whose expected end has passed or whose support is entirely
-  // on unselected awards
+  // plus manual people given planned support (future hires) — minus anyone
+  // whose expected end has passed or whose support is all on unselected awards
   const team = [];
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
@@ -275,6 +275,13 @@ function renderSummary() {
     if (det && det.lastPaid && monthDiff(det.lastPaid, curMonth) <= 2
         && shareMults(det).frac > 0) {
       team.push({ person, det });
+    } else if (!det && (person.plannedSupport || []).length) {
+      const synth = {
+        facultySalary: false, paidMonthNums: [], salaryByProject: {},
+        support: { shares: person.plannedSupport.map((s) =>
+          ({ project: s.project, pct: (s.pct || 0) / 100 })) },
+      };
+      if (shareMults(synth).frac > 0) team.push({ person, det: synth });
     }
   }
   const salaryAt = (person, m) => {
@@ -289,6 +296,7 @@ function renderSummary() {
     let sum = 0;
     for (const { person, det } of team) {
       if (person.endMonth && m > person.endMonth) continue;
+      if (person.startMonth && m < person.startMonth) continue;
       const { frac, mult } = shareMults(det);
       const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0)) * mult;
       const fees = (person.annualFees || 0) / 12 * frac;
@@ -370,8 +378,11 @@ function renderSummary() {
   const loadedOf = (t) => (t.person.monthlySalary || 0) * (1 + (t.person.fringeRate || 0))
     * shareMults(t.det).mult;
   const feesOf = (t) => (t.person.annualFees || 0) / 12 * shareMults(t.det).frac;
-  const yearRound = team.filter((t) => !t.det.facultySalary);
-  const summerFolk = team.filter((t) => t.det.facultySalary);
+  // future hires (start month ahead) count in the projection, not in the
+  // "current team" headline
+  const startedNow = team.filter((t) => !t.person.startMonth || t.person.startMonth <= curMonth);
+  const yearRound = startedNow.filter((t) => !t.det.facultySalary);
+  const summerFolk = startedNow.filter((t) => t.det.facultySalary);
   const baseMonthly = yearRound.reduce((a, t) => a + loadedOf(t) + feesOf(t), 0)
     + summerFolk.reduce((a, t) => a + feesOf(t), 0);
   const peakMonthly = baseMonthly + summerFolk.reduce((a, t) => a + loadedOf(t), 0);
@@ -479,6 +490,7 @@ function renderSummary() {
       if (!inTeam) return 0;
       const { person, det: d } = inTeam;
       if (person.endMonth && m > person.endMonth) return 0;
+      if (person.startMonth && m < person.startMonth) return 0;
       const mm = +m.slice(5, 7);
       const { frac, mult } = shareMults(d);
       const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0)) * mult;
@@ -810,6 +822,60 @@ function supportLabel(support) {
   return `${fmtMonth(support.month)}: ${parts.join(' · ')}`;
 }
 
+function plannedSupportCell(person) {
+  // manual people: choose which grant(s) will pay them (feeds the summary
+  // projection like a real support split), plus an optional start month
+  const cell = el('td', { class: 'support-edit' });
+  const planned = person.plannedSupport || (person.plannedSupport = []);
+  const activeAwards = grantFilter().all;
+
+  const rebuild = () => {
+    cell.replaceChildren();
+    planned.forEach((entry) => {
+      cell.append(el('span', { class: 'support-entry' },
+        el('select', {
+          onchange: (e) => { entry.project = e.target.value; save(); renderSummary(); },
+        }, activeAwards.map((a) => el('option', {
+          value: a.id, selected: a.id === entry.project || null,
+        }, a.shortName))),
+        el('input', {
+          type: 'number', min: 0, max: 100, step: 5, value: entry.pct,
+          class: 'pct-in', title: '% of their salary charged to this award',
+          oninput: (e) => {
+            const v = parseFloat(e.target.value);
+            entry.pct = isNaN(v) ? 0 : v;
+            save(); renderSummary();
+          },
+        }), '% ',
+        el('button', {
+          class: 'btn danger btn-x', title: 'remove this award',
+          onclick: () => {
+            person.plannedSupport = person.plannedSupport.filter((x) => x !== entry);
+            save(); rebuild(); renderSummary();
+          },
+        }, '✕')));
+    });
+    cell.append(el('button', {
+      class: 'btn btn-x', title: 'add an award to pay this person',
+      onclick: () => {
+        if (!activeAwards.length) return;
+        planned.push({ project: activeAwards[0].id, pct: 100 });
+        save(); rebuild(); renderSummary();
+      },
+    }, '+ grant'));
+    if (planned.length) {
+      cell.append(el('span', { class: 'muted-cell' }, ' from '));
+      cell.append(monthInput(person.startMonth,
+        (v) => { person.startMonth = v; save(); renderSummary(); }, 'YYYY-MM'));
+    } else {
+      cell.append(el('span', { class: 'muted-cell' },
+        ' pick a grant to include in the projection'));
+    }
+  };
+  rebuild();
+  return cell;
+}
+
 function renderPeople() {
   const box = $('#people');
   const tbl = el('table', { class: 'people' },
@@ -820,14 +886,15 @@ function renderPeople() {
       el('th', {}, 'Current support'), el('th', {})));
 
   const filter = grantFilter();
-  const onSelected = (det) => {
-    const shares = (det && det.support && det.support.shares) || [];
+  const onSelected = (person, det) => {
+    const shares = (det && det.support && det.support.shares)
+      || (person.plannedSupport || []).map((s) => ({ project: s.project }));
     return shares.some((sh) => filter.selectedSet.has(sh.project));
   };
 
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
-    const grayedOut = filter.filterActive && !onSelected(det);
+    const grayedOut = filter.filterActive && !onSelected(person, det);
     const numIn = (key, scale, step) => el('input', {
       type: 'number', step: step || 1,
       value: scale ? Math.round(person[key] * scale * 100) / 100 : Math.round(person[key] * 100) / 100,
@@ -885,10 +952,12 @@ function renderPeople() {
             save(); renderSummary();
           },
         })),
-      el('td', {
-        class: 'muted-cell support-cell',
-        title: supportLabel(det && det.support),
-      }, supportLabel(det && det.support)),
+      det
+        ? el('td', {
+            class: 'muted-cell support-cell',
+            title: supportLabel(det.support),
+          }, supportLabel(det.support))
+        : plannedSupportCell(person),
       el('td', {}, el('button', {
         class: 'btn danger btn-x', title: 'Remove person',
         onclick: () => {

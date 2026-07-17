@@ -190,6 +190,10 @@ td.paychange { white-space: nowrap; font-size: 12px; color: var(--muted); }
 td.name-cell { white-space: nowrap; }
 td.support-cell { max-width: 215px; overflow: hidden; text-overflow: ellipsis; }
 .btn-x { padding: 2px 8px; }
+td.support-edit { white-space: normal; }
+.support-entry { display: inline-flex; align-items: center; gap: 3px; margin-right: 8px; }
+.support-entry select { max-width: 150px; font-size: 12px; }
+input.pct-in { width: 48px; text-align: right; }
 input, select {
   font: inherit; font-size: 13px; color: var(--ink);
   background: var(--page); border: 1px solid var(--baseline);
