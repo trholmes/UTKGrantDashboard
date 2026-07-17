@@ -1154,21 +1154,18 @@ function summaryChart(timeline, projStart, lineSeries, barSeries, opts) {
   // ---- bottom panel: stacked monthly costs ----
   const barTop = padT + lineH + gap, barBot = barTop + barH;
 
-  // broken y-axis: one vertical axis segment per panel with break marks
-  // between them, signalling that the scale changes
+  // broken y-axis: one vertical axis segment per panel, with a visible gap
+  // between them signalling that the scale changes
   svg.append(mkLine(padL, padL, padT, padT + lineH, 'axis'));
   svg.append(mkLine(padL, padL, barTop, barBot, 'axis'));
-  const breakMark = (y) => svg.append(mkLine(padL - 4, padL + 4, y + 3, y - 3, 'axis'));
-  breakMark(padT + lineH);
-  breakMark(barTop);
-  const caption = (x, y, anchor, str) => {
-    const t = mkText(x, y, anchor, str);
+  const caption = (y, str) => {
+    const t = mkText(W - padR, y, 'end', str);
     t.setAttribute('font-size', '10');
     t.setAttribute('font-style', 'italic');
     svg.append(t);
   };
-  caption(W - padR, padT + 9, 'end', 'available funds');
-  caption(padL + 2, barTop - 4, 'start', 'monthly spend');
+  caption(padT + 9, 'available funds');
+  caption(barTop - 4, 'monthly spend');
   const stackTot = timeline.map((_, i) => barSeries.reduce((a, s) => a + Math.max(0, s.values[i]), 0));
   const bmax = Math.max(1, barMax, ...stackTot);
   const by = (v) => barBot - v / bmax * barH;
