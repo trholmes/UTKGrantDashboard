@@ -506,15 +506,21 @@ function renderSummary() {
     const histFringe = (cfg ? cfg.fringeRate : det.fringeRate) || 0;
     const inTeam = teamByName.get(name);
     const byProj = det.salaryByProject || {};
+    const feesByProj = det.feesByProject || {};
     const values = timeline.map((m, i) => {
       if (i < projStart) {
         // history from the per-award breakdown, restricted to the selected
-        // awards, with each award's own F&A folded in (gray history is a
-        // residual of actual totals, so the stacks stay conserved)
+        // awards, with each award's own F&A folded in and the person's
+        // posted fees included (gray history is a residual of actual
+        // totals, so the stacks stay conserved)
         let sum = 0;
         for (const pid of Object.keys(byProj)) {
           if (!selectedSet.has(pid)) continue;
           sum += (byProj[pid][m] || 0) * (1 + histFringe) * (1 + faOf(pid));
+        }
+        for (const pid of Object.keys(feesByProj)) {
+          if (!selectedSet.has(pid)) continue;
+          sum += feesByProj[pid][m] || 0;
         }
         return sum;
       }
@@ -731,7 +737,9 @@ function renderPortfolio() {
       const detByName = new Map(DATA.people.map((d) => [d.name, d]));
       const teamByName = new Map((cardModel ? cardModel.team : []).map((t) => [t.person.name, t]));
       const names = new Set();
-      for (const d of DATA.people) if ((d.salaryByProject || {})[p.id]) names.add(d.name);
+      for (const d of DATA.people) {
+        if ((d.salaryByProject || {})[p.id] || (d.feesByProject || {})[p.id]) names.add(d.name);
+      }
       if (canProject) {
         for (const t of cardModel.team) {
           const shares = (t.det.support && t.det.support.shares) || [];
@@ -742,10 +750,11 @@ function renderPortfolio() {
       for (const name of names) {
         const d = detByName.get(name);
         const hist = (d && (d.salaryByProject || {})[p.id]) || {};
+        const feesHist = (d && (d.feesByProject || {})[p.id]) || {};
         const fr = ((cfgByName.get(name) || d || {}).fringeRate) || 0;
         const t = teamByName.get(name);
         const values = timeline.map((m, i) => {
-          if (i < projStart) return (hist[m] || 0) * (1 + fr) * (1 + fa);
+          if (i < projStart) return (hist[m] || 0) * (1 + fr) * (1 + fa) + (feesHist[m] || 0);
           return (canProject && t) ? cardModel.personCostOn(p.id, t, m) : 0;
         });
         if (values.some((v) => v > 1)) {

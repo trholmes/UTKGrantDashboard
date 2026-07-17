@@ -504,6 +504,7 @@ def _build_payload_uncached(data_dir):
     monthly = {}        # project -> {month: net}
     monthly_parts = {}  # project -> {month: {fac, personnel, other}}
     proj_people = {}    # project -> person -> {month: salary}
+    proj_fees = {}      # project -> person -> {month: fees/tuition}
     for t in transactions:
         m = month_of(t["date"])
         if not m:
@@ -522,7 +523,13 @@ def _build_payload_uncached(data_dir):
                 bymp[m] = bymp.get(m, 0.0) + t["amount"]
         else:
             ty = t["type"].lower()
-            parts["fees" if ("fee" in ty or "tuition" in ty) else "other"] += t["amount"]
+            if "fee" in ty or "tuition" in ty:
+                parts["fees"] += t["amount"]
+                if t["person"]:
+                    bymf = proj_fees.setdefault(t["project"], {}).setdefault(t["person"], {})
+                    bymf[m] = bymf.get(m, 0.0) + t["amount"]
+            else:
+                parts["other"] += t["amount"]
 
     # project names conventionally end with the PI surname; collect surnames
     # so display names can drop them ("DOE DE-SC0020267 Holmes" -> "DOE DE-SC0020267")
@@ -635,9 +642,15 @@ def _build_payload_uncached(data_dir):
         for name, bym in ppl.items():
             by_person_proj.setdefault(name, {})[proj_id] = {
                 m: round(v, 2) for m, v in sorted(bym.items()) if abs(v) > 1}
+    fees_by_person_proj = {}
+    for proj_id, ppl in proj_fees.items():
+        for name, bym in ppl.items():
+            fees_by_person_proj.setdefault(name, {})[proj_id] = {
+                m: round(v, 2) for m, v in sorted(bym.items()) if abs(v) > 1}
     for person in people:
         person["support"] = support.get(person["name"])
         person["salaryByProject"] = by_person_proj.get(person["name"], {})
+        person["feesByProject"] = fees_by_person_proj.get(person["name"], {})
 
     flags = compute_flags([p for p in projects if p["inDashboard"]], today_iso)
 
