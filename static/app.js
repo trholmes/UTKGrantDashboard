@@ -123,7 +123,30 @@ function save() {
 
 /* ---------- rendering ---------- */
 
+let sectionsWired = false;
+
+function setupSections() {
+  // every section header toggles its body; state persists in the config
+  if (!sectionsWired) {
+    sectionsWired = true;
+    document.querySelectorAll('section.collapsible > h2').forEach((h) => {
+      h.addEventListener('click', () => {
+        const sec = h.parentElement;
+        sec.classList.toggle('collapsed');
+        CFG.ui.collapsed = CFG.ui.collapsed || {};
+        CFG.ui.collapsed[sec.dataset.key] = sec.classList.contains('collapsed');
+        save();
+      });
+    });
+  }
+  const collapsed = CFG.ui.collapsed || {};
+  document.querySelectorAll('section.collapsible').forEach((sec) => {
+    sec.classList.toggle('collapsed', !!collapsed[sec.dataset.key]);
+  });
+}
+
 function renderAll() {
+  setupSections();
   renderStatus();
   renderFlags();
   renderSummary();
@@ -353,15 +376,78 @@ function renderSummary() {
     return series[i - histMonths.length];
   });
 
+  // stacked monthly-cost bars under the balance line: one color per person
+  // (history from payroll, projection from the People table incl. expected
+  // ends and pay changes), gray for spending not tied to a person
+  const projStart = histMonths.length;
+  const cfgByName = new Map(CFG.people.map((p) => [p.name, p]));
+  const teamByName = new Map(team.map((t) => [t.person.name, t]));
+  const candidates = new Map();  // name -> detected record
+  for (const d of DATA.people) {
+    if (Object.keys(d.salaryHistory || {}).some((m) => m >= (histMonths[0] || curMonth) && m <= curMonth)) {
+      candidates.set(d.name, d);
+    }
+  }
+  for (const t of team) candidates.set(t.person.name, t.det);
+
+  const persons = [...candidates.entries()].map(([name, det]) => {
+    const cfg = cfgByName.get(name);
+    const histFringe = (cfg ? cfg.fringeRate : det.fringeRate) || 0;
+    const inTeam = teamByName.get(name);
+    const values = timeline.map((m, i) => {
+      if (i < projStart) {
+        return ((det.salaryHistory || {})[m] || 0) * (1 + histFringe);
+      }
+      if (!inTeam) return 0;
+      const { person, det: d } = inTeam;
+      if (person.endMonth && m > person.endMonth) return 0;
+      const mm = +m.slice(5, 7);
+      const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0));
+      const fees = (person.annualFees || 0) / 12;
+      return (!d.facultySalary || (d.paidMonthNums || []).includes(mm) ? loaded : 0) + fees;
+    });
+    return { name, values, total: values.reduce((a, b) => a + b, 0) };
+  }).filter((p) => p.total > 1);
+  persons.sort((a, b) => b.total - a.total);
+
+  const PERSON_COLORS = ['var(--series-2)', 'var(--series-3)', 'var(--series-5)',
+    'var(--series-6)', 'var(--series-7)', 'var(--series-8)'];
+  const barSeries = persons.slice(0, PERSON_COLORS.length)
+    .map((p, i) => ({ name: p.name, color: PERSON_COLORS[i], values: p.values }));
+  const rest = persons.slice(PERSON_COLORS.length);
+  if (rest.length) {
+    barSeries.push({
+      name: `${rest.length} others`, color: 'var(--series-4)',
+      values: timeline.map((_, i) => rest.reduce((a, p) => a + p.values[i], 0)),
+    });
+  }
+  barSeries.push({
+    name: 'not tied to a person', color: 'var(--muted)',
+    values: timeline.map((m, i) => {
+      if (i < projStart) {
+        const total = active.reduce((a, p) => a + ((p.monthly || {})[m] || 0), 0);
+        const ppl = persons.reduce((a, p) => a + p.values[i], 0);
+        return Math.max(0, total - ppl);
+      }
+      return otherTrend;
+    }),
+  });
+
   card.append(el('div', { class: 'spark-title', style: 'margin-top:6px' },
-    'Available funds — history, then projected at current team + other-spending trend; balances expire as awards end'));
-  card.append(lineChart(timeline, [
+    'Top: available funds (history, then projection; balances expire as awards end). '
+    + 'Bottom: monthly costs by person — lighter bars are projected.'));
+  card.append(summaryChart(timeline, projStart, [
     { name: 'projected', values: projSeries, dashed: true, endLabel: true },
     { name: 'actual', values: actualSeries },
-  ], { W: 960, H: 170, padL: 56 }));
-  card.append(el('div', { class: 'legend' },
-    el('span', { class: 'key' }, el('span', { class: 'swatch' }), ' actual available funds'),
-    el('span', { class: 'key' }, el('span', { class: 'swatch dashed' }), ' projection')));
+  ], barSeries));
+  const legend = el('div', { class: 'mini-legend', style: 'margin-top:4px' },
+    el('span', { class: 'key' }, el('span', { class: 'swatch' }), ' available (actual)'),
+    el('span', { class: 'key' }, el('span', { class: 'swatch dashed' }), ' available (projected)'));
+  for (const s of barSeries) {
+    legend.append(el('span', { class: 'key' },
+      el('span', { class: 'dot', style: `background:${s.color}` }), s.name));
+  }
+  card.append(legend);
   card.append(el('div', { class: 'burn-line' }, 'Awards end: ',
     active.slice().sort((a, b) => (a.end < b.end ? -1 : 1))
       .map((p) => `${p.shortName} ${fmtMonth(p.end.slice(0, 7))}`).join(' · '),
@@ -956,6 +1042,135 @@ function renderSim() {
     ]));
     box.append(card);
   }
+}
+
+/* ----- portfolio summary figure: balance line over stacked cost bars ----- */
+
+function summaryChart(timeline, projStart, lineSeries, barSeries) {
+  const W = 960, padL = 56, padR = 14, padT = 8;
+  const lineH = 150, gap = 24, barH = 88, xLabH = 18;
+  const H = padT + lineH + gap + barH + xLabH;
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('width', '100%');
+  svg.style.display = 'block';
+
+  const slot = (W - padL - padR) / timeline.length;
+  const x = (i) => padL + (i + 0.5) * slot;
+
+  const mkLine = (x1, x2, y1, y2, cls) => {
+    const l = document.createElementNS(NS, 'line');
+    l.setAttribute('x1', x1); l.setAttribute('x2', x2);
+    l.setAttribute('y1', y1); l.setAttribute('y2', y2);
+    l.setAttribute('class', cls);
+    return l;
+  };
+  const mkText = (tx, ty, anchor, str) => {
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', tx); t.setAttribute('y', ty);
+    t.setAttribute('text-anchor', anchor);
+    t.textContent = str;
+    return t;
+  };
+
+  // ---- top panel: available funds ----
+  const lv = lineSeries.flatMap((s) => s.values).filter((v) => v !== null && isFinite(v));
+  const lo = Math.min(0, ...lv), hi = Math.max(0, ...lv);
+  const lspan = (hi - lo) || 1;
+  const ly = (v) => padT + (hi - v) / lspan * lineH;
+  const lstep = niceStep(lspan / 3);
+  for (let v = Math.ceil(lo / lstep) * lstep; v <= hi + 1; v += lstep) {
+    svg.append(mkLine(padL, W - padR, ly(v), ly(v),
+      Math.abs(v) < lstep / 100 ? 'zeroline' : 'gridline'));
+    svg.append(mkText(padL - 6, ly(v) + 3.5, 'end', fmtK(v)));
+  }
+  for (const s of lineSeries) {
+    const path = document.createElementNS(NS, 'path');
+    let d = '', pen = false;
+    s.values.forEach((v, i) => {
+      if (v === null || !isFinite(v)) { pen = false; return; }
+      d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${ly(v).toFixed(1)}`;
+      pen = true;
+    });
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', s.dashed ? 'var(--muted)' : 'var(--series-1)');
+    path.setAttribute('stroke-width', '2');
+    if (s.dashed) path.setAttribute('stroke-dasharray', '4 4');
+    svg.append(path);
+    if (s.endLabel) {
+      const nonNull = s.values.filter((v) => v !== null && isFinite(v));
+      const last = nonNull[nonNull.length - 1];
+      if (last === undefined) continue;
+      const offset = ly(last) < (padT + lineH) / 2 ? 13 : -7;
+      const t = mkText(W - padR, Math.max(padT + 9, Math.min(padT + lineH - 3, ly(last) + offset)),
+        'end', fmtK(last) + ' at end');
+      t.setAttribute('font-weight', '600');
+      t.setAttribute('fill', last < 0 ? 'var(--critical)' : 'var(--good-text)');
+      svg.append(t);
+    }
+  }
+
+  // ---- bottom panel: stacked monthly costs ----
+  const barTop = padT + lineH + gap, barBot = barTop + barH;
+  const stackTot = timeline.map((_, i) => barSeries.reduce((a, s) => a + Math.max(0, s.values[i]), 0));
+  const bmax = Math.max(1, ...stackTot);
+  const by = (v) => barBot - v / bmax * barH;
+  const bstep = niceStep(bmax / 2);
+  for (let v = 0; v <= bmax + 1; v += bstep) {
+    svg.append(mkLine(padL, W - padR, by(v), by(v), v === 0 ? 'zeroline' : 'gridline'));
+    svg.append(mkText(padL - 6, by(v) + 3.5, 'end', fmtK(v)));
+  }
+  const bw = Math.max(2, slot - 2);
+  timeline.forEach((m, i) => {
+    let cum = 0;
+    for (const s of barSeries) {
+      const v = Math.max(0, s.values[i]);
+      if (v < 0.5) continue;
+      const r = document.createElementNS(NS, 'rect');
+      r.setAttribute('x', x(i) - bw / 2);
+      r.setAttribute('y', by(cum + v));
+      r.setAttribute('width', bw);
+      r.setAttribute('height', Math.max(0.5, by(cum) - by(cum + v)));
+      r.setAttribute('fill', s.color);
+      r.setAttribute('fill-opacity', i >= projStart ? '0.45' : '0.9');
+      svg.append(r);
+      cum += v;
+    }
+  });
+
+  // ---- shared x labels ----
+  const every = Math.max(1, Math.ceil(timeline.length / 7));
+  timeline.forEach((m, i) => {
+    if (i % every !== 0 && i !== timeline.length - 1) return;
+    if (i !== timeline.length - 1 && timeline.length - 1 - i < every) return;
+    svg.append(mkText(x(i), H - 4, i === timeline.length - 1 ? 'end' : 'middle', fmtMonth(m)));
+  });
+
+  // ---- crosshair + tooltip across both panels ----
+  const cross = mkLine(0, 0, padT, barBot, 'gridline');
+  cross.setAttribute('visibility', 'hidden');
+  svg.append(cross);
+  svg.addEventListener('mousemove', (e) => {
+    const rect = svg.getBoundingClientRect();
+    const fx = (e.clientX - rect.left) / rect.width * W;
+    const i = Math.floor((fx - padL) / slot);
+    if (i < 0 || i >= timeline.length) { cross.setAttribute('visibility', 'hidden'); hideTip(); return; }
+    cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i));
+    cross.setAttribute('visibility', 'visible');
+    const bal = lineSeries.map((s) => s.values[i]).find((v) => v !== null && isFinite(v));
+    const parts = barSeries
+      .map((s) => ({ name: s.name, v: Math.max(0, s.values[i]) }))
+      .filter((p) => p.v > 0.5)
+      .sort((a, b) => b.v - a.v);
+    const top = parts.slice(0, 3).map((p) => `${p.name} ${fmtK(p.v)}`).join(' · ');
+    showTip(`${fmtMonth(timeline[i])} — available ${bal !== undefined ? fmt$(bal) : '—'}`
+      + ` · out ${fmt$(stackTot[i])}${top ? ` (${top}${parts.length > 3 ? ', …' : ''})` : ''}`,
+      e.clientX, e.clientY);
+  });
+  svg.addEventListener('mouseleave', () => { cross.setAttribute('visibility', 'hidden'); hideTip(); });
+  return svg;
 }
 
 /* ----- projection line chart (SVG) ----- */

@@ -21,43 +21,53 @@
 <main id="app">
   <section id="error-panel" hidden></section>
 
-  <section id="flags-section">
-    <h2>Flags</h2>
-    <div class="portfolio-controls">
-      <label class="check"><input type="checkbox" id="show-notes"> Show note-level flags</label>
+  <section id="flags-section" class="collapsible" data-key="flags">
+    <h2><span class="chev">▾</span> Flags</h2>
+    <div class="sec-body">
+      <div class="portfolio-controls">
+        <label class="check"><input type="checkbox" id="show-notes"> Show note-level flags</label>
+      </div>
+      <div id="flags"></div>
     </div>
-    <div id="flags"></div>
   </section>
 
-  <section id="summary-section">
-    <h2>Portfolio summary</h2>
-    <div id="summary"></div>
-  </section>
-
-  <section id="portfolio-section">
-    <h2>Portfolio</h2>
-    <div class="portfolio-controls">
-      <label class="check"><input type="checkbox" id="show-closed"> Show closed projects</label>
+  <section id="summary-section" class="collapsible" data-key="summary">
+    <h2><span class="chev">▾</span> Portfolio summary</h2>
+    <div class="sec-body">
+      <div id="summary"></div>
     </div>
-    <div id="portfolio" class="cards"></div>
   </section>
 
-  <section id="people-section">
-    <h2>People</h2>
-    <p class="hint">Seeded automatically from payroll lines in the detail report — edit anything.
-       Monthly salary is the gross charged per month; fringe is estimated from actual fringe charges.</p>
-    <div id="people"></div>
-    <button id="add-person" class="btn">+ Add person</button>
+  <section id="people-section" class="collapsible" data-key="people">
+    <h2><span class="chev">▾</span> People</h2>
+    <div class="sec-body">
+      <p class="hint">Seeded automatically from payroll lines in the detail report — edit anything.
+         Monthly salary is the gross charged per month; fringe is estimated from actual fringe charges.</p>
+      <div id="people"></div>
+      <button id="add-person" class="btn">+ Add person</button>
+    </div>
   </section>
 
-  <section id="simulator-section">
-    <h2>What-if: put someone on a grant</h2>
-    <p class="hint">Assign a person to one or more awards and see the projected balance to the end of
-       each award. Costs = salary × effort + fringe + F&amp;A on (salary + fringe); student fees are
-       excluded from F&amp;A (MTDC) and only charged if checked.</p>
-    <div id="assignments"></div>
-    <button id="add-assignment" class="btn">+ Add assignment</button>
-    <div id="sim-results"></div>
+  <section id="portfolio-section" class="collapsible" data-key="portfolio">
+    <h2><span class="chev">▾</span> Portfolio</h2>
+    <div class="sec-body">
+      <div class="portfolio-controls">
+        <label class="check"><input type="checkbox" id="show-closed"> Show closed projects</label>
+      </div>
+      <div id="portfolio" class="cards"></div>
+    </div>
+  </section>
+
+  <section id="simulator-section" class="collapsible" data-key="simulator">
+    <h2><span class="chev">▾</span> What-if: put someone on a grant</h2>
+    <div class="sec-body">
+      <p class="hint">Assign a person to one or more awards and see the projected balance to the end of
+         each award. Costs = salary × effort + fringe + F&amp;A on (salary + fringe); student fees are
+         excluded from F&amp;A (MTDC) and only charged if checked.</p>
+      <div id="assignments"></div>
+      <button id="add-assignment" class="btn">+ Add assignment</button>
+      <div id="sim-results"></div>
+    </div>
   </section>
 
   <footer class="foot">

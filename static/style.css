@@ -13,7 +13,11 @@
   --series-1: #2a78d6;   /* primary data hue (blue) */
   --series-2: #1baf7a;   /* aqua */
   --series-3: #eda100;   /* yellow */
+  --series-4: #008300;   /* green */
   --series-5: #4a3aa7;   /* violet — PI/faculty summer salary */
+  --series-6: #e34948;   /* red */
+  --series-7: #e87ba4;   /* magenta */
+  --series-8: #eb6834;   /* orange */
   --good: #0ca30c;
   --good-text: #006300;
   --warning: #fab219;
@@ -35,7 +39,11 @@
     --series-1: #3987e5;
     --series-2: #199e70;
     --series-3: #c98500;
+    --series-4: #008300;
     --series-5: #9085e9;
+    --series-6: #e66767;
+    --series-7: #d55181;
+    --series-8: #d95926;
     --good-text: #0ca30c;
     --shadow: none;
   }
@@ -52,6 +60,10 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 20px 48px; }
 
 h1 { font-size: 19px; margin: 0; }
 h2 { font-size: 15px; margin: 30px 0 10px; }
+section.collapsible > h2 { cursor: pointer; user-select: none; }
+.chev { display: inline-block; transition: transform 0.15s; font-size: 11px; color: var(--muted); width: 12px; }
+section.collapsed .chev { transform: rotate(-90deg); }
+section.collapsed .sec-body { display: none; }
 h3 { font-size: 14px; margin: 0; }
 .subtitle, .hint { color: var(--ink-2); font-size: 12.5px; }
 .hint { margin: 2px 0 10px; max-width: 72ch; }
@@ -139,7 +151,7 @@ tr.stale td { color: var(--muted); }
 
 .spark-block { margin-top: 2px; }
 .spark-title { color: var(--muted); font-size: 11.5px; margin-bottom: 2px; }
-.mini-legend { display: flex; gap: 12px; font-size: 11px; color: var(--muted); margin-top: 1px; }
+.mini-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; color: var(--muted); margin-top: 1px; }
 .mini-legend .key { display: inline-flex; align-items: center; gap: 4px; }
 .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
 .burn-line { color: var(--ink-2); font-size: 12.5px; }
