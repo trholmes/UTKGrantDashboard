@@ -38,11 +38,11 @@ code. You are looking to fill two roles; map whatever they have onto them:
 | Role | Must contain | Powers | Priority |
 |---|---|---|---|
 | **Budget snapshot** | budget vs. spent (ideally by category), per award, with award dates | award cards, remaining balances, overspend flags, the anchor for every projection | required |
-| **Transaction detail** | dated line items, ideally with person names on payroll lines | burn rates, spending history, people + salaries/fringe for the simulator, support splits | strongly recommended |
+| **Transaction detail** | dated line items, ideally with person names on payroll lines | burn rates, spending history, people + salaries/fringe for hire planning, support splits | strongly recommended |
 
 If no single export has budgets, look for a "budget vs. actual" or "award
 summary" report — some budget-bearing source is non-negotiable. If detail
-has no person names, the simulator still works with manually entered
+has no person names, hires can still be modeled with manually entered
 people; say so rather than blocking.
 
 ## Phase 2 — inspect the exports before designing
@@ -109,10 +109,11 @@ on 127.0.0.1; `static/` = one page of vanilla JS/CSS; `data/config.json`
    3 nonzero months, per-person fringe rate, annualized fees; show where
    each person's support currently comes from (%, from their latest paid
    month). Everything editable.
-6. **What-if simulator** — assign person → award(s) at % effort over a date
-   range. Monthly cost = salary×effort + fringe + F&A×(salary+fringe),
-   fees optionally added and excluded from the F&A base. Project balances
-   at a baseline burn (editable, default 12-mo average) ± assignments.
+6. **Planning fields on People** — expected end date (graduation), a
+   scheduled pay change, and for manual people a grant selector + start
+   timing, so hires and departures are modeled in one place. Monthly cost
+   = salary × (1+fringe) × support share × (1 + that award's F&A), with
+   fees excluded from the F&A base. Keep planning edits out of history.
 
 ## Verification norms
 
@@ -128,7 +129,7 @@ on 127.0.0.1; `static/` = one page of vanilla JS/CSS; `data/config.json`
 `dashboard.py` — parsers (`classify_csv`, `parse_pi_dashboard`,
 `parse_detail`), analysis (`compute_flags`, burn rates, people), and the
 localhost server. `static/app.js` — all rendering: cards, hand-rolled SVG
-charts with hover tooltips, the simulator. `README.md` — the shape of good
+charts with hover tooltips, the planning fields. `README.md` — the shape of good
 export instructions (link + click-path + what each file powers).
 
 Adapt the parsers and rules; keep the architecture and the security model.

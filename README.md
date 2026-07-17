@@ -7,11 +7,12 @@ already pull from the university reporting system, and gives you:
   category, spending pace vs. time elapsed, monthly burn rate, and runway.
 * **Automatic flags** — overspent categories, charges against $0 budget
   lines, awards ending soon with money unspent, on-pace-to-overrun warnings.
-* **What-if hiring simulator** — put a person (grad student, postdoc, …) on
-  one or more awards at some % effort for a date range and see each award's
-  projected balance through the end of the award, including fringe, F&A, and
-  optional student fees. People are seeded automatically from the payroll
-  lines in your detail export, with their real salaries and fringe rates.
+* **Hiring & departure planning in the People table** — people are seeded
+  automatically from the payroll lines in your detail export, with their
+  real salaries, fringe rates, and support splits. Add a person and pick
+  their grant to model a hire; set an expected end date for a graduation,
+  or a scheduled pay change — every edit flows straight into the
+  projections (salary + fringe + fees + the F&A each award charges).
 
 ![The dashboard, showing fictional demo data](docs/screenshot.png)
 
@@ -72,7 +73,7 @@ This is the transaction-level report (in Oracle BI Publisher; the report
 number changes from time to time, but the export filename always starts
 with `RPT`). It provides **monthly burn rates and spending history,
 everyone paid from each award (with salaries and fringe rates that seed
-the hiring simulator), support splits, and exact F&A rates**. Without it
+hire planning), support splits, and exact F&A rates**. Without it
 the dashboard still works, but falls back to linear burn estimates and an
 empty People section.
 
@@ -108,10 +109,10 @@ Notes:
 * Burn rate prefers a 12-month average (capturing seasonality like summer
   salary), falling back to the last 3 active months, then to a linear
   average over the award period.
-* Simulator cost model: `salary × effort + fringe (person's actual rate) +
-  F&A × (salary + fringe)`. Student fees/tuition are excluded from the F&A
-  base (MTDC) and only charged if you check the box. The F&A rate comes
-  from the detail export and is editable per award.
+* Projection cost model per person: `salary × (1 + fringe) × support share
+  × (1 + that award's F&A)`, plus their fees/tuition — which are excluded
+  from the F&A base (MTDC). The F&A rate comes from the detail export
+  (estimated from the budget where absent).
 * You can layer in things the reporting system doesn't know yet, and they
   feed the portfolio summary's funded-through projection: **expected new
   funding** per award (on its card, with the expected new end date —

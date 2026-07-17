@@ -154,8 +154,6 @@ function renderAll() {
   renderSummary();
   renderPortfolio();
   renderPeople();
-  renderAssignments();
-  renderSim();
 }
 
 function renderStatus() {
@@ -935,7 +933,7 @@ function renderPeople() {
       oninput: (e) => {
         const v = parseFloat(e.target.value);
         person[key] = isNaN(v) ? 0 : (scale ? v / scale : v);
-        save(); renderSim(); renderSummary(); renderPortfolio();
+        save(); renderSummary(); renderPortfolio();
       },
     });
     tbl.append(el('tr', {
@@ -945,7 +943,7 @@ function renderPeople() {
       el('td', { class: 'name-cell' },
         el('input', {
           type: 'text', value: person.name, title: person.name,
-          oninput: (e) => { person.name = e.target.value; save(); renderSim(); },
+          oninput: (e) => { person.name = e.target.value; save(); },
         }),
         el('span', {
           class: 'dot',
@@ -996,193 +994,11 @@ function renderPeople() {
         class: 'btn danger btn-x', title: 'Remove person',
         onclick: () => {
           CFG.people = CFG.people.filter((p) => p !== person);
-          CFG.assignments = CFG.assignments.filter((a) => a.personId !== person.id);
-          save(); renderSummary(); renderPortfolio(); renderPeople(); renderAssignments(); renderSim();
+          save(); renderSummary(); renderPortfolio(); renderPeople();
         },
       }, '✕'))));
   }
   box.replaceChildren(el('div', { class: 'people-wrap' }, tbl));
-}
-
-/* ----- simulator ----- */
-
-function activeProjects() {
-  return DATA.projects.filter((p) => p.inDashboard && p.status.toLowerCase() === 'active');
-}
-
-function renderAssignments() {
-  const box = $('#assignments');
-  box.replaceChildren();
-  const curMonth = DATA.today.slice(0, 7);
-
-  for (const a of CFG.assignments) {
-    const personSel = el('select', {
-      onchange: (e) => { a.personId = e.target.value; save(); renderSim(); },
-    }, CFG.people.map((p) => el('option', { value: p.id, selected: p.id === a.personId || null }, p.name || '(unnamed)')));
-
-    const projSel = el('select', {
-      onchange: (e) => { a.projectId = e.target.value; save(); renderSim(); },
-    }, activeProjects().map((p) => el('option', { value: p.id, selected: p.id === a.projectId || null }, `${p.shortName} (${p.id})`)));
-
-    box.append(el('div', { class: 'assignment-row' },
-      personSel,
-      el('span', { class: 'sep' }, 'on'), projSel,
-      el('span', { class: 'sep' }, 'at'),
-      el('input', {
-        type: 'number', min: 0, max: 200, step: 5, value: a.effort,
-        oninput: (e) => { a.effort = parseFloat(e.target.value) || 0; save(); renderSim(); },
-      }),
-      el('span', { class: 'sep' }, '% of their salary, from'),
-      el('input', {
-        type: 'month', value: a.startMonth || curMonth,
-        oninput: (e) => { a.startMonth = e.target.value; save(); renderSim(); },
-      }),
-      el('span', { class: 'sep' }, 'to'),
-      el('input', {
-        type: 'month', value: a.endMonth || '',
-        oninput: (e) => { a.endMonth = e.target.value; save(); renderSim(); },
-      }),
-      el('label', { class: 'check' },
-        el('input', {
-          type: 'checkbox', checked: a.chargeFees || null,
-          onchange: (e) => { a.chargeFees = e.target.checked; save(); renderSim(); },
-        }), ' charge fees/tuition'),
-      el('button', {
-        class: 'btn danger',
-        onclick: () => {
-          CFG.assignments = CFG.assignments.filter((x) => x !== a);
-          save(); renderAssignments(); renderSim();
-        },
-      }, 'Remove')));
-  }
-}
-
-function assignmentCost(a, person, faRate) {
-  const salary = (person.monthlySalary || 0) * (a.effort || 0) / 100;
-  const fringe = salary * (person.fringeRate || 0);
-  const fees = a.chargeFees ? (person.annualFees || 0) / 12 : 0;
-  const idc = (salary + fringe) * (faRate || 0);
-  return { salary, fringe, fees, idc, total: salary + fringe + fees + idc };
-}
-
-function renderSim() {
-  const box = $('#sim-results');
-  box.replaceChildren();
-  const curMonth = DATA.today.slice(0, 7);
-
-  const byProject = new Map();
-  for (const a of CFG.assignments) {
-    const person = CFG.people.find((p) => p.id === a.personId);
-    const project = DATA.projects.find((p) => p.id === a.projectId);
-    if (!person || !project || !(a.effort > 0)) continue;
-    if (!byProject.has(project.id)) byProject.set(project.id, []);
-    byProject.get(project.id).push({ a, person });
-  }
-  if (!byProject.size) {
-    if (CFG.assignments.length === 0) {
-      box.append(el('p', { class: 'hint' }, 'No assignments yet — add one above to project balances.'));
-    }
-    return;
-  }
-
-  for (const [pid, items] of byProject) {
-    const project = DATA.projects.find((p) => p.id === pid);
-    const ov = CFG.overrides[pid] || (CFG.overrides[pid] = {});
-    const faRate = ov.faRate ?? project.faRate ?? 0;
-    const defaultBaseline = project.burn.avg12 ?? project.burn.recent ?? project.burn.linear ?? 0;
-    const baseline = ov.baselineBurn ?? defaultBaseline;
-
-    const startBal = project.totals.remaining - project.totals.committed;
-    const endMonth = project.end ? project.end.slice(0, 7)
-      : items.reduce((m, it) => (it.a.endMonth > m ? it.a.endMonth : m), curMonth);
-    const firstMonth = monthAdd(curMonth, 1);
-
-    const card = el('div', { class: 'sim-card' });
-    card.append(el('div', { class: 'sim-head' },
-      el('h3', {}, `${project.shortName} (${project.id})`),
-      el('span', { class: 'hint' }, `award ends ${fmtMonth(endMonth)}`)));
-
-    // per-assignment cost breakdown
-    for (const { a, person } of items) {
-      const c = assignmentCost(a, person, faRate);
-      const from = a.startMonth || curMonth;
-      const to = a.endMonth || endMonth;
-      const nMonths = Math.max(0, monthDiff(from, to) + 1);
-      card.append(el('div', { class: 'burn-line' },
-        el('b', {}, `${person.name} at ${a.effort}%: `),
-        `${fmt$(c.salary)} salary + ${fmt$(c.fringe)} fringe` +
-        (c.fees ? ` + ${fmt$(c.fees)} fees` : '') +
-        ` + ${fmt$(c.idc)} F&A = `,
-        el('b', {}, fmt$(c.total) + '/mo'),
-        ` · ${fmtMonth(from)}–${fmtMonth(to)} (${nMonths} mo, ${fmt$(c.total * nMonths)} total)`));
-    }
-
-    if (endMonth < firstMonth) {
-      card.append(el('p', { class: 'hint' }, 'This award ends before next month — nothing to project.'));
-      box.append(card);
-      continue;
-    }
-
-    // projection
-    const months = monthRange(firstMonth, endMonth);
-    let balBase = startBal, balWith = startBal;
-    const seriesBase = [], seriesWith = [];
-    let runsOut = null;
-    for (const m of months) {
-      balBase -= baseline;
-      let extra = 0;
-      for (const { a, person } of items) {
-        const from = a.startMonth || curMonth;
-        const to = a.endMonth || endMonth;
-        if (m >= from && m <= to) extra += assignmentCost(a, person, faRate).total;
-      }
-      balWith -= baseline + extra;
-      if (runsOut === null && balWith < 0) runsOut = m;
-      seriesBase.push(balBase);
-      seriesWith.push(balWith);
-    }
-    const final = seriesWith[seriesWith.length - 1];
-
-    const statVal = (v) => el('span', { class: 'stat-value ' + (v >= 0 ? 'ok' : 'bad') },
-      (v >= 0 ? '✓ ' : '✕ ') + fmt$(v));
-    card.append(el('div', { class: 'sim-stats' },
-      el('div', { class: 'stat' },
-        el('div', { class: 'stat-label' }, 'Balance now'),
-        el('div', { class: 'stat-value' }, fmt$(startBal)),
-        project.totals.committed ? el('div', { class: 'stat-note' }, `after ${fmt$(project.totals.committed)} committed`) : null),
-      el('div', { class: 'stat' },
-        el('div', { class: 'stat-label' }, `Projected at award end (${fmtMonth(endMonth)})`),
-        statVal(final),
-        el('div', { class: 'stat-note' }, runsOut ? `runs out ${fmtMonth(runsOut)}` : 'stays in the black')),
-      el('div', { class: 'baseline-ctl' },
-        'Baseline burn (existing spending): $',
-        el('input', {
-          type: 'number', step: 100, value: Math.round(baseline),
-          oninput: (e) => {
-            const v = parseFloat(e.target.value);
-            ov.baselineBurn = isNaN(v) ? null : v;
-            save(); renderSim();
-          },
-        }), '/mo',
-        el('span', { class: 'sep' }, '· F&A'),
-        el('input', {
-          type: 'number', step: 0.5, value: Math.round(faRate * 1000) / 10,
-          oninput: (e) => {
-            const v = parseFloat(e.target.value);
-            ov.faRate = isNaN(v) ? null : v / 100;
-            save(); renderSim();
-          },
-        }), '%')));
-
-    card.append(el('div', { class: 'legend' },
-      el('span', { class: 'key' }, el('span', { class: 'swatch' }), ' With new assignments'),
-      el('span', { class: 'key' }, el('span', { class: 'swatch dashed' }), ' Current spending only')));
-    card.append(lineChart(months, [
-      { name: 'current only', values: seriesBase, dashed: true },
-      { name: 'with assignments', values: seriesWith, dashed: false },
-    ]));
-    box.append(card);
-  }
 }
 
 /* ----- portfolio summary figure: balance line over stacked cost bars ----- */
@@ -1330,103 +1146,6 @@ function summaryChart(timeline, projStart, lineSeries, barSeries, opts) {
 
 /* ----- projection line chart (SVG) ----- */
 
-function lineChart(months, series, opts) {
-  const { W = 640, H = 220, padL = 56 } = opts || {};
-  const padR = 14, padT = 10, padB = 24;
-  const NS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  svg.setAttribute('width', '100%');
-  svg.style.display = 'block';
-
-  const all = series.flatMap((s) => s.values).filter((v) => v !== null && isFinite(v));
-  const lo = Math.min(0, ...all), hi = Math.max(0, ...all);
-  const span = (hi - lo) || 1;
-  const x = (i) => padL + (months.length === 1 ? 0 : i / (months.length - 1) * (W - padL - padR));
-  const y = (v) => padT + (hi - v) / span * (H - padT - padB);
-
-  // horizontal gridlines + $ labels (4 ticks)
-  const step = niceStep(span / 3);
-  for (let v = Math.ceil(lo / step) * step; v <= hi + 1; v += step) {
-    const line = document.createElementNS(NS, 'line');
-    line.setAttribute('x1', padL); line.setAttribute('x2', W - padR);
-    line.setAttribute('y1', y(v)); line.setAttribute('y2', y(v));
-    line.setAttribute('class', Math.abs(v) < step / 100 ? 'zeroline' : 'gridline');
-    svg.append(line);
-    const label = document.createElementNS(NS, 'text');
-    label.setAttribute('x', padL - 6); label.setAttribute('y', y(v) + 3.5);
-    label.setAttribute('text-anchor', 'end');
-    label.textContent = fmtK(v);
-    svg.append(label);
-  }
-
-  // x labels: ~6 month ticks (fewer on small charts); the last month always
-  // gets a label, and a modulo tick too close to it is dropped
-  const every = Math.max(1, Math.ceil(months.length / (W < 400 ? 4 : 6)));
-  months.forEach((m, i) => {
-    if (i % every !== 0 && i !== months.length - 1) return;
-    if (i !== months.length - 1 && months.length - 1 - i < every) return;
-    const label = document.createElementNS(NS, 'text');
-    label.setAttribute('x', x(i)); label.setAttribute('y', H - 6);
-    label.setAttribute('text-anchor', i === months.length - 1 ? 'end' : 'middle');
-    label.textContent = fmtMonth(m);
-    svg.append(label);
-  });
-
-  for (const s of series) {
-    const path = document.createElementNS(NS, 'path');
-    let d = '', pen = false;
-    s.values.forEach((v, i) => {
-      if (v === null || !isFinite(v)) { pen = false; return; }
-      d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
-      pen = true;
-    });
-    path.setAttribute('d', d);
-    path.setAttribute('fill', 'none');
-    path.setAttribute('stroke', s.dashed ? 'var(--muted)' : 'var(--series-1)');
-    path.setAttribute('stroke-width', '2');
-    if (s.dashed) path.setAttribute('stroke-dasharray', '4 4');
-    svg.append(path);
-    if (s.endLabel) {
-      const nonNull = s.values.filter((v) => v !== null && isFinite(v));
-      const last = nonNull[nonNull.length - 1];
-      if (last === undefined) continue;
-      // place the label below the line end when the line ends high, above when low
-      const offset = y(last) < (H - padB) / 2 ? 13 : -7;
-      const t = document.createElementNS(NS, 'text');
-      t.setAttribute('x', W - padR);
-      t.setAttribute('y', Math.max(padT + 9, Math.min(H - padB - 3, y(last) + offset)));
-      t.setAttribute('text-anchor', 'end');
-      t.setAttribute('font-weight', '600');
-      t.setAttribute('fill', last < 0 ? 'var(--critical)' : 'var(--good-text)');
-      t.textContent = fmtK(last) + ' at end';
-      svg.append(t);
-    }
-  }
-
-  // hover crosshair + tooltip
-  const cross = document.createElementNS(NS, 'line');
-  cross.setAttribute('class', 'gridline');
-  cross.setAttribute('y1', padT); cross.setAttribute('y2', H - padB);
-  cross.setAttribute('visibility', 'hidden');
-  svg.append(cross);
-  svg.addEventListener('mousemove', (e) => {
-    const rect = svg.getBoundingClientRect();
-    const fx = (e.clientX - rect.left) / rect.width * W;
-    const i = Math.round((fx - padL) / ((W - padL - padR) / Math.max(1, months.length - 1)));
-    if (i < 0 || i >= months.length) { cross.setAttribute('visibility', 'hidden'); hideTip(); return; }
-    cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i));
-    cross.setAttribute('visibility', 'visible');
-    const parts = series
-      .filter((s) => s.values[i] !== null && isFinite(s.values[i]))
-      .map((s) => (series.length > 1 ? `${s.name}: ` : '') + fmt$(s.values[i]));
-    if (!parts.length) { cross.setAttribute('visibility', 'hidden'); hideTip(); return; }
-    showTip(`${fmtMonth(months[i])} — ${parts.join(' · ')}`, e.clientX, e.clientY);
-  });
-  svg.addEventListener('mouseleave', () => { cross.setAttribute('visibility', 'hidden'); hideTip(); });
-  return svg;
-}
-
 function niceStep(raw) {
   const mag = Math.pow(10, Math.floor(Math.log10(Math.max(1, raw))));
   for (const m of [1, 2, 2.5, 5, 10]) if (raw <= m * mag) return m * mag;
@@ -1445,18 +1164,6 @@ $('#show-notes').addEventListener('change', () => {
 $('#add-person').addEventListener('click', () => {
   CFG.people.push({ id: uid(), name: '', monthlySalary: 0, fringeRate: 0.1, annualFees: 0, source: 'manual' });
   save(); renderPeople();
-});
-$('#add-assignment').addEventListener('click', () => {
-  if (!CFG.people.length) { alert('Add a person first.'); return; }
-  const proj = activeProjects()[0];
-  const cur = DATA.today.slice(0, 7);
-  CFG.assignments.push({
-    id: uid(), personId: CFG.people[0].id, projectId: proj ? proj.id : null,
-    effort: 100, startMonth: monthAdd(cur, 1),
-    endMonth: proj && proj.end ? proj.end.slice(0, 7) : monthAdd(cur, 12),
-    chargeFees: false,
-  });
-  save(); renderAssignments(); renderSim();
 });
 
 load();

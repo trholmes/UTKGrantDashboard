@@ -201,16 +201,8 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .badge { font-size: 10.5px; color: var(--muted); border: 1px solid var(--grid); border-radius: 99px; padding: 1px 7px; }
-#add-person, #add-assignment { margin-top: 10px; }
+#add-person { margin-top: 10px; }
 
-/* ---- simulator ---- */
-.assignment-row {
-  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 9px; padding: 8px 12px; margin-bottom: 6px;
-}
-.assignment-row .sep { color: var(--muted); font-size: 12px; }
-.assignment-row input[type="number"] { width: 64px; text-align: right; }
 
 .sim-card {
   background: var(--surface); border: 1px solid var(--border);
