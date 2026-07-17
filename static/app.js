@@ -536,9 +536,9 @@ function renderSummary() {
     }),
   });
 
-  card.append(el('div', { class: 'spark-title', style: 'margin-top:6px' },
-    'Top: available funds (history, then projection; balances expire as awards end). '
-    + 'Bottom: monthly costs by person — lighter bars are projected.'));
+  //card.append(el('div', { class: 'spark-title', style: 'margin-top:6px' },
+  //  'Top: available funds (history, then projection; balances expire as awards end). '
+  //  + 'Bottom: monthly costs by person — lighter bars are projected.'));
   card.append(summaryChart(timeline, projStart, [
     { name: 'projected', values: projSeries, dashed: true, endLabel: true },
     { name: 'actual', values: actualSeries },
@@ -553,8 +553,7 @@ function renderSummary() {
   card.append(legend);
   card.append(el('div', { class: 'burn-line' }, 'Awards end: ',
     active.slice().sort((a, b) => (a.end < b.end ? -1 : 1))
-      .map((p) => `${p.shortName} ${fmtMonth(p.end.slice(0, 7))}`).join(' · '),
-    '. Hypothetical simulator assignments are not included here.'));
+      .map((p) => `${p.shortName} ${fmtMonth(p.end.slice(0, 7))}`).join(' · ')));
   box.append(card);
 }
 
@@ -823,56 +822,25 @@ function supportLabel(support) {
 }
 
 function plannedSupportCell(person) {
-  // manual people: choose which grant(s) will pay them (feeds the summary
-  // projection like a real support split), plus an optional start month
+  // manual people: one grant that will pay them, feeding the summary
+  // projection. Timing comes from the other columns: start someone later
+  // with salary 0 + a Pay change; stop them with Expected end.
   const cell = el('td', { class: 'support-edit' });
-  const planned = person.plannedSupport || (person.plannedSupport = []);
   const activeAwards = grantFilter().all;
-
-  const rebuild = () => {
-    cell.replaceChildren();
-    planned.forEach((entry) => {
-      cell.append(el('span', { class: 'support-entry' },
-        el('select', {
-          onchange: (e) => { entry.project = e.target.value; save(); renderSummary(); },
-        }, activeAwards.map((a) => el('option', {
-          value: a.id, selected: a.id === entry.project || null,
-        }, a.shortName))),
-        el('input', {
-          type: 'number', min: 0, max: 100, step: 5, value: entry.pct,
-          class: 'pct-in', title: '% of their salary charged to this award',
-          oninput: (e) => {
-            const v = parseFloat(e.target.value);
-            entry.pct = isNaN(v) ? 0 : v;
-            save(); renderSummary();
-          },
-        }), '% ',
-        el('button', {
-          class: 'btn danger btn-x', title: 'remove this award',
-          onclick: () => {
-            person.plannedSupport = person.plannedSupport.filter((x) => x !== entry);
-            save(); rebuild(); renderSummary();
-          },
-        }, '✕')));
-    });
-    cell.append(el('button', {
-      class: 'btn btn-x', title: 'add an award to pay this person',
-      onclick: () => {
-        if (!activeAwards.length) return;
-        planned.push({ project: activeAwards[0].id, pct: 100 });
-        save(); rebuild(); renderSummary();
-      },
-    }, '+ grant'));
-    if (planned.length) {
-      cell.append(el('span', { class: 'muted-cell' }, ' from '));
-      cell.append(monthInput(person.startMonth,
-        (v) => { person.startMonth = v; save(); renderSummary(); }, 'YYYY-MM'));
-    } else {
-      cell.append(el('span', { class: 'muted-cell' },
-        ' pick a grant to include in the projection'));
-    }
-  };
-  rebuild();
+  const current = (person.plannedSupport || [])[0];
+  cell.append(el('select', {
+    title: 'Grant that will pay this person (100%). To start them later, set '
+      + 'salary 0 and schedule a Pay change; use Expected end to stop them.',
+    onchange: (e) => {
+      person.plannedSupport = e.target.value
+        ? [{ project: e.target.value, pct: 100 }] : [];
+      save(); renderSummary(); renderPeople();
+    },
+  },
+    el('option', { value: '' }, '— pick a grant —'),
+    activeAwards.map((a) => el('option', {
+      value: a.id, selected: (current && a.id === current.project) || null,
+    }, a.shortName))));
   return cell;
 }
 
