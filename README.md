@@ -113,6 +113,10 @@ Notes:
   × (1 + that award's F&A)`, plus their fees/tuition — which are excluded
   from the F&A base (MTDC). The F&A rate comes from the detail export
   (estimated from the budget where absent).
+* Projected salaries escalate each **August** (defaults: UT 3%, GRA 5%)
+  and fees/tuition at 2%/yr — rates editable under the People table. A
+  scheduled pay change is taken at face value for its month and escalates
+  from there.
 * You can layer in things the reporting system doesn't know yet, and they
   feed the portfolio summary's funded-through projection: **expected new
   funding** per award (on its card, with the expected new end date —

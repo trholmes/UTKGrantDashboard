@@ -192,6 +192,8 @@ td.name-cell { white-space: nowrap; }
 td.support-cell { max-width: 215px; overflow: hidden; text-overflow: ellipsis; }
 .btn-x { padding: 2px 8px; }
 td.support-edit select { max-width: 190px; font-size: 12px; }
+.esc-row { color: var(--ink-2); font-size: 12.5px; margin-top: 8px; }
+input.esc-in { width: 52px; text-align: right; }
 input, select {
   font: inherit; font-size: 13px; color: var(--ink);
   background: var(--page); border: 1px solid var(--baseline);

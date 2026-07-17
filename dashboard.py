@@ -263,6 +263,8 @@ def estimate_people(transactions, window_months):
             "projects": sorted(projects.get(person, [])),
             "salaryHistory": {m: round(v, 2) for m, v in nonzero},
             "facultySalary": any("faculty" in ty.lower() for ty in types.get(person, ())),
+            "gra": any("gta" in ty.lower() or "gra" in ty.lower()
+                       for ty in types.get(person, ())),
             "paidMonthNums": sorted({int(m[5:7]) for m, _ in nonzero}),
         })
     return people

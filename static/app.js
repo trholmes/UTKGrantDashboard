@@ -95,6 +95,8 @@ function initConfig() {
   CFG.assignments = Array.isArray(CFG.assignments) ? CFG.assignments : [];
   CFG.overrides = CFG.overrides && typeof CFG.overrides === 'object' ? CFG.overrides : {};
   CFG.ui = CFG.ui && typeof CFG.ui === 'object' ? CFG.ui : {};
+  CFG.escalation = CFG.escalation && typeof CFG.escalation === 'object'
+    ? CFG.escalation : { ut: 0.03, gra: 0.05, fees: 0.02 };
   $('#show-notes').checked = !!CFG.ui.showNotes;
   // merge in newly-detected payroll people (matched by name)
   const known = new Set(CFG.people.map((p) => p.name));
@@ -277,19 +279,39 @@ function renderSummary() {
     } else if (!det && (person.plannedSupport || []).length) {
       const synth = {
         facultySalary: false, paidMonthNums: [], salaryByProject: {},
+        gra: (person.fringeRate || 0) < 0.13,  // grad-level fringe => GRA raises
         support: { shares: person.plannedSupport.map((s) =>
           ({ project: s.project, pct: (s.pct || 0) / 100 })) },
       };
       if (shareMults(synth).frac > 0) team.push({ person, det: synth });
     }
   }
-  const salaryAt = (person, m) => {
+  // escalation: raises compound each August in projected months (UT and
+  // GRA salary rates, plus a fees/tuition rate — editable in People).
+  // A scheduled pay change resets the escalation reference: its amount is
+  // taken at face value for its month and escalates from there.
+  const esc = CFG.escalation;
+  const augustsBetween = (fromM, toM) => {
+    if (toM <= fromM) return 0;
+    let n = 0;
+    for (let y = +fromM.slice(0, 4); y <= +toM.slice(0, 4); y++) {
+      const aug = `${y}-08`;
+      if (aug > fromM && aug <= toM) n++;
+    }
+    return n;
+  };
+  const escFactor = (rate, fromM, toM) => Math.pow(1 + (rate || 0), augustsBetween(fromM, toM));
+  const salaryAt = (person, det, m) => {
+    let base = person.monthlySalary || 0;
+    let ref = curMonth;
     if (person.payChangeMonth && person.payChangeSalary != null
         && m >= person.payChangeMonth) {
-      return person.payChangeSalary;
+      base = person.payChangeSalary;
+      ref = person.payChangeMonth;
     }
-    return person.monthlySalary || 0;
+    return base * escFactor(det && det.gra ? esc.gra : esc.ut, ref, m);
   };
+  const feesAt = (person, m) => (person.annualFees || 0) / 12 * escFactor(esc.fees, curMonth, m);
   const personnelFor = (m) => {
     const mm = +m.slice(5, 7);
     let sum = 0;
@@ -297,8 +319,8 @@ function renderSummary() {
       if (person.endMonth && m > person.endMonth) continue;
       if (person.startMonth && m < person.startMonth) continue;
       const { frac, mult } = shareMults(det);
-      const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0)) * mult;
-      const fees = (person.annualFees || 0) / 12 * frac;
+      const loaded = salaryAt(person, det, m) * (1 + (person.fringeRate || 0)) * mult;
+      const fees = feesAt(person, m) * frac;
       if (!det.facultySalary || (det.paidMonthNums || []).includes(mm)) sum += loaded;
       sum += fees;
     }
@@ -348,8 +370,8 @@ function renderSummary() {
     const pct = sh ? Math.max(0, sh.pct || 0) : 0;
     if (pct <= 0) return 0;
     const mm = +m.slice(5, 7);
-    const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0)) * pct * (1 + faOf(pid));
-    const fees = (person.annualFees || 0) / 12 * pct;
+    const loaded = salaryAt(person, det, m) * (1 + (person.fringeRate || 0)) * pct * (1 + faOf(pid));
+    const fees = feesAt(person, m) * pct;
     return (!det.facultySalary || (det.paidMonthNums || []).includes(mm) ? loaded : 0) + fees;
   };
   cardModel = { team, personCostOn, projectOtherTrend };
@@ -530,8 +552,8 @@ function renderSummary() {
       if (person.startMonth && m < person.startMonth) return 0;
       const mm = +m.slice(5, 7);
       const { frac, mult } = shareMults(d);
-      const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0)) * mult;
-      const fees = (person.annualFees || 0) / 12 * frac;
+      const loaded = salaryAt(person, d, m) * (1 + (person.fringeRate || 0)) * mult;
+      const fees = feesAt(person, m) * frac;
       return (!d.facultySalary || (d.paidMonthNums || []).includes(mm) ? loaded : 0) + fees;
     });
     return {
@@ -1018,7 +1040,23 @@ function renderPeople() {
         },
       }, '✕'))));
   }
-  box.replaceChildren(el('div', { class: 'people-wrap' }, tbl));
+  const esc = CFG.escalation;
+  const escIn = (key, title) => el('input', {
+    type: 'number', step: 0.5, class: 'esc-in', title,
+    value: Math.round(esc[key] * 1000) / 10,
+    oninput: (e) => {
+      const v = parseFloat(e.target.value);
+      esc[key] = isNaN(v) ? 0 : v / 100;
+      save(); renderSummary(); renderPortfolio();
+    },
+  });
+  const escRow = el('div', { class: 'esc-row' },
+    'Escalation each August (projections only): UT salaries ',
+    escIn('ut', 'annual raise for faculty, postdocs, and staff'), '% · GRA salaries ',
+    escIn('gra', 'annual raise for graduate assistants (detected from payroll type)'), '% · fees/tuition ',
+    escIn('fees', 'annual increase applied to fees and tuition'), '%');
+
+  box.replaceChildren(el('div', { class: 'people-wrap' }, tbl), escRow);
 }
 
 /* ----- portfolio summary figure: balance line over stacked cost bars ----- */
