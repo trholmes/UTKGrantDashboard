@@ -195,45 +195,88 @@ function renderFlags() {
 
 /* ----- portfolio summary ----- */
 
+function grantFilter() {
+  // the award selection scoping the summary, cards, and people graying
+  const curMonth = DATA.today.slice(0, 7);
+  const all = DATA.projects.filter((p) =>
+    p.inDashboard && p.status.toLowerCase() === 'active'
+    && p.end && p.end.slice(0, 7) >= curMonth);
+  const excluded = new Set((CFG.ui && CFG.ui.excluded) || []);
+  const selected = all.filter((p) => !excluded.has(p.id));
+  return {
+    all, selected,
+    selectedSet: new Set(selected.map((p) => p.id)),
+    filterActive: selected.length < all.length,
+  };
+}
+
 function renderSummary() {
   const box = $('#summary');
   box.replaceChildren();
   const curMonth = DATA.today.slice(0, 7);
-  const active = DATA.projects.filter((p) =>
-    p.inDashboard && p.status.toLowerCase() === 'active'
-    && p.end && p.end.slice(0, 7) >= curMonth);
-  if (!active.length) return;
+  const filter = grantFilter();
+  if (!filter.all.length) return;
+
+  // checkbox chips: which awards feed this summary (and show as cards)
+  box.append(el('div', { class: 'grant-filter' },
+    filter.all.map((p) => el('label', { class: 'check' },
+      el('input', {
+        type: 'checkbox', checked: filter.selectedSet.has(p.id) || null,
+        onchange: (e) => {
+          const ex = new Set((CFG.ui && CFG.ui.excluded) || []);
+          if (e.target.checked) ex.delete(p.id); else ex.add(p.id);
+          CFG.ui.excluded = [...ex];
+          save(); renderAll();
+        },
+      }), ` ${p.shortName}`))));
+
+  const active = filter.selected;
+  const selectedSet = filter.selectedSet;
+  if (!active.length) {
+    box.append(el('p', { class: 'hint' }, 'No awards selected.'));
+    personColors = new Map();
+    return;
+  }
 
   const totBudget = active.reduce((a, p) => a + p.totals.budget, 0);
   const totSpent = active.reduce((a, p) => a + p.totals.spent, 0);
   const available = active.reduce((a, p) => a + p.totals.remaining - p.totals.committed, 0);
 
-  // current team = people with a salary in the last 2 months of detail data,
-  // minus anyone whose expected end date has already passed
-  const team = [];
-  for (const person of CFG.people) {
-    const det = DATA.people.find((d) => d.name === person.name);
-    if (person.endMonth && person.endMonth < curMonth) continue;
-    if (det && det.lastPaid && monthDiff(det.lastPaid, curMonth) <= 2) {
-      team.push({ person, det });
-    }
-  }
   // Per-person cost = salary + fringe, times (1 + their F&A rate), plus
-  // fees/tuition (/12, excluded from F&A per MTDC). A person's F&A rate is
-  // the support-split-weighted average of the rates on the awards paying
-  // them — so when they leave, the F&A they generate leaves too. Fees and
-  // the personnel-generated F&A are both excluded from the "other spending"
-  // trend below, so nothing is double-counted.
+  // fees/tuition (/12, excluded from F&A per MTDC). Costs are scoped to the
+  // selected awards via each person's support split: `frac` is the fraction
+  // of their support on selected awards (scales fees), `mult` additionally
+  // folds in each selected award's F&A rate (scales salary+fringe). With
+  // everything selected, frac = 1 and this matches the unfiltered model.
   const faOf = (pid) => {
     const ov = CFG.overrides[pid] || {};
     const proj = DATA.projects.find((p) => p.id === pid);
     return ov.faRate ?? (proj ? proj.faRate : null) ?? 0;
   };
-  const personFA = (det) => {
+  const shareMults = (det) => {
+    let frac = 0, mult = 0;
     const s = det && det.support;
-    if (!s || !s.shares || !s.shares.length) return 0;
-    return s.shares.reduce((a, sh) => a + Math.max(0, sh.pct || 0) * faOf(sh.project), 0);
+    for (const sh of (s && s.shares) || []) {
+      if (!selectedSet.has(sh.project)) continue;
+      const pct = Math.max(0, sh.pct || 0);
+      frac += pct;
+      mult += pct * (1 + faOf(sh.project));
+    }
+    return { frac, mult };
   };
+
+  // current team = people with a salary in the last 2 months of detail data,
+  // minus anyone whose expected end has passed or whose support is entirely
+  // on unselected awards
+  const team = [];
+  for (const person of CFG.people) {
+    const det = DATA.people.find((d) => d.name === person.name);
+    if (person.endMonth && person.endMonth < curMonth) continue;
+    if (det && det.lastPaid && monthDiff(det.lastPaid, curMonth) <= 2
+        && shareMults(det).frac > 0) {
+      team.push({ person, det });
+    }
+  }
   const salaryAt = (person, m) => {
     if (person.payChangeMonth && person.payChangeSalary != null
         && m >= person.payChangeMonth) {
@@ -246,8 +289,9 @@ function renderSummary() {
     let sum = 0;
     for (const { person, det } of team) {
       if (person.endMonth && m > person.endMonth) continue;
-      const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0)) * (1 + personFA(det));
-      const fees = (person.annualFees || 0) / 12;
+      const { frac, mult } = shareMults(det);
+      const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0)) * mult;
+      const fees = (person.annualFees || 0) / 12 * frac;
       if (!det.facultySalary || (det.paidMonthNums || []).includes(mm)) sum += loaded;
       sum += fees;
     }
@@ -324,11 +368,12 @@ function renderSummary() {
 
   // team cost decomposition: year-round people vs. PI/faculty summer salary
   const loadedOf = (t) => (t.person.monthlySalary || 0) * (1 + (t.person.fringeRate || 0))
-    * (1 + personFA(t.det));
+    * shareMults(t.det).mult;
+  const feesOf = (t) => (t.person.annualFees || 0) / 12 * shareMults(t.det).frac;
   const yearRound = team.filter((t) => !t.det.facultySalary);
   const summerFolk = team.filter((t) => t.det.facultySalary);
-  const baseMonthly = yearRound.reduce((a, t) => a + loadedOf(t) + (t.person.annualFees || 0) / 12, 0)
-    + summerFolk.reduce((a, t) => a + (t.person.annualFees || 0) / 12, 0);
+  const baseMonthly = yearRound.reduce((a, t) => a + loadedOf(t) + feesOf(t), 0)
+    + summerFolk.reduce((a, t) => a + feesOf(t), 0);
   const peakMonthly = baseMonthly + summerFolk.reduce((a, t) => a + loadedOf(t), 0);
   const summerMonths = [...new Set(summerFolk.flatMap((t) => t.det.paidMonthNums || []))]
     .sort((a, b) => a - b).map((n) => MONTH_NAMES[n - 1]).join('/');
@@ -418,19 +463,26 @@ function renderSummary() {
     const cfg = cfgByName.get(name);
     const histFringe = (cfg ? cfg.fringeRate : det.fringeRate) || 0;
     const inTeam = teamByName.get(name);
-    const fa = personFA(det);
+    const byProj = det.salaryByProject || {};
     const values = timeline.map((m, i) => {
       if (i < projStart) {
-        // gray history is a residual of actual totals, so attributing F&A
-        // to the person here keeps the stacks continuous and conserved
-        return ((det.salaryHistory || {})[m] || 0) * (1 + histFringe) * (1 + fa);
+        // history from the per-award breakdown, restricted to the selected
+        // awards, with each award's own F&A folded in (gray history is a
+        // residual of actual totals, so the stacks stay conserved)
+        let sum = 0;
+        for (const pid of Object.keys(byProj)) {
+          if (!selectedSet.has(pid)) continue;
+          sum += (byProj[pid][m] || 0) * (1 + histFringe) * (1 + faOf(pid));
+        }
+        return sum;
       }
       if (!inTeam) return 0;
       const { person, det: d } = inTeam;
       if (person.endMonth && m > person.endMonth) return 0;
       const mm = +m.slice(5, 7);
-      const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0)) * (1 + fa);
-      const fees = (person.annualFees || 0) / 12;
+      const { frac, mult } = shareMults(d);
+      const loaded = salaryAt(person, m) * (1 + (person.fringeRate || 0)) * mult;
+      const fees = (person.annualFees || 0) / 12 * frac;
       return (!d.facultySalary || (d.paidMonthNums || []).includes(mm) ? loaded : 0) + fees;
     });
     return {
@@ -516,8 +568,10 @@ function renderPortfolio() {
   const grid = $('#portfolio');
   grid.replaceChildren();
   const showClosed = $('#show-closed').checked;
+  const hidden = new Set((CFG.ui && CFG.ui.excluded) || []);
   const projects = DATA.projects.filter(
-    (p) => p.inDashboard && (showClosed || p.status.toLowerCase() === 'active'));
+    (p) => p.inDashboard && !hidden.has(p.id)
+      && (showClosed || p.status.toLowerCase() === 'active'));
 
   // shared axes for all sparklines: same month range and same $ scale,
   // so the little plots are comparable across awards
@@ -833,8 +887,15 @@ function renderPeople() {
       el('th', {}, 'Expected end'), el('th', {}, 'Pay change'),
       el('th', {}, 'Current support'), el('th', {})));
 
+  const filter = grantFilter();
+  const onSelected = (det) => {
+    const shares = (det && det.support && det.support.shares) || [];
+    return shares.some((sh) => filter.selectedSet.has(sh.project));
+  };
+
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
+    const grayedOut = filter.filterActive && !onSelected(det);
     const numIn = (key, scale, step) => el('input', {
       type: 'number', step: step || 1,
       value: scale ? Math.round(person[key] * scale * 100) / 100 : Math.round(person[key] * 100) / 100,
@@ -844,7 +905,10 @@ function renderPeople() {
         save(); renderSim(); renderSummary();
       },
     });
-    tbl.append(el('tr', {},
+    tbl.append(el('tr', {
+      class: grayedOut ? 'filtered-out' : '',
+      title: grayedOut ? 'not supported by any selected award' : '',
+    },
       el('td', { class: 'name-cell' },
         el('input', {
           type: 'text', value: person.name, title: person.name,

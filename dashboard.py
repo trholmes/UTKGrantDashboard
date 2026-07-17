@@ -630,8 +630,14 @@ def _build_payload_uncached(data_dir):
         window_months = max(1.0, months_between(w_from, w_to))
     people = estimate_people(transactions, window_months)
     support = current_support(proj_people)
+    by_person_proj = {}
+    for proj_id, ppl in proj_people.items():
+        for name, bym in ppl.items():
+            by_person_proj.setdefault(name, {})[proj_id] = {
+                m: round(v, 2) for m, v in sorted(bym.items()) if abs(v) > 1}
     for person in people:
         person["support"] = support.get(person["name"])
+        person["salaryByProject"] = by_person_proj.get(person["name"], {})
 
     flags = compute_flags([p for p in projects if p["inDashboard"]], today_iso)
 
