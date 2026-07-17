@@ -1108,6 +1108,15 @@ function summaryChart(timeline, projStart, lineSeries, barSeries, opts) {
       r.setAttribute('height', Math.max(0.5, by(cum) - by(cum + v)));
       r.setAttribute('fill', s.color);
       r.setAttribute('fill-opacity', i >= projStart ? '0.45' : '0.9');
+      // hovering one segment shows that series alone, not the whole stack
+      r.addEventListener('mousemove', (e) => {
+        e.stopPropagation();
+        cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i));
+        cross.setAttribute('visibility', 'visible');
+        showTip(`${fmtMonth(m)} — ${s.name}: ${fmt$(v)} of ${fmt$(stackTot[i])} out`
+          + (i >= projStart ? ' (projected)' : ''), e.clientX, e.clientY);
+      });
+      r.addEventListener('mouseleave', hideTip);
       svg.append(r);
       cum += v;
     }
