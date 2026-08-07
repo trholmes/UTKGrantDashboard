@@ -38,6 +38,8 @@ const fmtK = (v) => {
   return sign + '$' + Math.round(a);
 };
 const fmtPct = (v) => (v * 100).toFixed(0) + '%';
+const fmtBytes = (n) => (n >= 1e6 ? (n / 1e6).toFixed(0) + ' MB'
+  : n >= 1e3 ? (n / 1e3).toFixed(0) + ' kB' : n + ' B');
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function fmtMonth(m) {  // '2026-07' -> 'Jul 2026'
@@ -1235,6 +1237,7 @@ let LINKS = null;          // last /api/report-links response
 let INBOX = null;          // last /api/inbox response
 let inboxTimer = null;     // poll handle, live for a minute after a download
 let watchingSince = null;  // epoch seconds; files newer than this are "new"
+let lastImport = null;     // {names, at} — the "imported ✓" note
 
 function fetchState() {
   const ui = CFG.ui;
@@ -1263,11 +1266,12 @@ function defaultFrom() {
 }
 
 function fetchProjects() {
+  // ticked awards plus whatever is typed in the "also include" box, left as
+  // typed — the server canonicalizes it (bare numbers, case, duplicates)
   const st = fetchState();
   const excluded = new Set(st.excluded);
   const known = DATA.projects.filter((p) => !excluded.has(p.id)).map((p) => p.id);
-  const extra = (st.extra.match(/SPN\d+/gi) || []).map((s) => s.toUpperCase());
-  return [...new Set(known.concat(extra))];
+  return known.concat(st.extra.trim() ? [st.extra] : []);
 }
 
 function renderGetData() {
@@ -1311,26 +1315,30 @@ function renderGetData() {
       isActive(p) ? null : el('span', { class: 'chip-closed' }, 'closed')));
   }
 
+  const known = DATA.projects.length;
   const allOn = st.excluded.length === 0;
   const detail = el('div', { class: 'getdata-step' },
     el('div', { class: 'step-head' }, el('span', { class: 'step-num' }, '2'),
       'Expenditure detail report — transactions, salaries, F&A'),
-    el('div', { class: 'hint' },
-      'Pick the projects and the window. Wider is better: burn rates and '
-      + 'seasonality come from this history.'),
-    chips,
+    el('div', { class: 'hint' }, known
+      ? 'Pick the projects and the window. Wider is better: burn rates and '
+        + 'seasonality come from this history.'
+      : 'Type your project numbers — they are the SPN codes on your award '
+        + 'notices, and every one of them appears in the PI Dashboard export '
+        + 'above. Once that export is in, they show up here as checkboxes.'),
+    known ? chips : null,
     el('div', { class: 'getdata-row' },
-      el('button', {
+      known ? el('button', {
         class: 'btn btn-x',
         onclick: () => {
           st.excluded = allOn ? DATA.projects.map((p) => p.id) : [];
           save(); renderGetData();
         },
-      }, allOn ? 'none' : 'all'),
-      el('label', { class: 'check' }, 'Also include: ',
+      }, allOn ? 'Select none' : 'Select all') : null,
+      el('label', { class: 'check' }, known ? 'Also include: ' : 'Project numbers: ',
         el('input', {
           type: 'text', class: 'extra-in', placeholder: 'SPN107048 SPN107049',
-          value: st.extra, size: 24,
+          value: st.extra, size: known ? 24 : 40,
           oninput: (e) => { st.extra = e.target.value; save(); refreshLinks(); },
         }))),
     el('div', { class: 'getdata-row' },
@@ -1345,8 +1353,9 @@ function renderGetData() {
           onchange: (e) => { st.to = e.target.value || null; save(); refreshLinks(); },
         }))));
 
+  // no href until the URL is built, which the stylesheet shows as disabled
   const link = el('a', {
-    class: 'btn primary', id: 'dl-link', href: '#', target: '_blank', rel: 'noopener',
+    class: 'btn primary', id: 'dl-link', target: '_blank', rel: 'noopener',
     onclick: () => { if (LINKS) startWatching(); },
   }, '⬇ Download detail report CSV');
   const extraLinks = el('div', { class: 'dl-extra', id: 'dl-extra' });
@@ -1419,7 +1428,7 @@ async function refreshLinks() {
     $('#dl-link').removeAttribute('href');
     return;
   }
-  const params = new URLSearchParams({ projects: projects.join(','), from: st.from, mode: st.mode });
+  const params = new URLSearchParams({ projects: projects.join(' '), from: st.from, mode: st.mode });
   if (st.to) params.set('to', st.to);
   if (st.template) params.set('template', st.template);
   try {
@@ -1495,6 +1504,11 @@ function isNewFile(f) {
   return watchingSince !== null && f.mtime >= watchingSince && !f.imported;
 }
 
+function isReady(f) {
+  // a big export may still be streaming into the folder; wait for it
+  return f.settled !== false;
+}
+
 async function refreshInbox() {
   if (!$('#inbox')) return;
   try {
@@ -1503,7 +1517,7 @@ async function refreshInbox() {
   } catch {
     INBOX = null;
   }
-  const fresh = (INBOX && INBOX.files || []).filter(isNewFile);
+  const fresh = (INBOX && INBOX.files || []).filter((f) => isNewFile(f) && isReady(f));
   if (fresh.length && fetchState().autoImport) {
     await importFiles(fresh.map((f) => f.name));
     return;
@@ -1525,6 +1539,10 @@ function renderInbox() {
   }
   const files = INBOX.files || [];
   const pending = files.filter((f) => !f.imported);
+  if (lastImport && Date.now() - lastImport.at < 60000) {
+    box.append(el('div', { class: 'imported-note' },
+      'Imported ' + lastImport.names.join(', ') + ' into the data folder ✓'));
+  }
   box.append(el('div', { class: 'hint' },
     inboxTimer ? 'Watching ' + INBOX.dir + ' for the download…'
       : 'Exports found in ' + INBOX.dir + ':'));
@@ -1538,16 +1556,18 @@ function renderInbox() {
       el('span', { class: 'inbox-name' }, f.name),
       el('span', { class: 'badge' },
         f.type === 'detail' ? 'detail report' : 'PI Dashboard'),
-      el('span', { class: 'muted-cell' },
-        f.modified + ' · ' + Math.max(1, Math.round(f.size / 1e6)) + ' MB'),
-      el('button', { class: 'btn btn-x', onclick: () => importFiles([f.name]) },
-        'Import')));
+      el('span', { class: 'muted-cell' }, f.modified + ' · ' + fmtBytes(f.size)),
+      isReady(f)
+        ? el('button', { class: 'btn btn-x', onclick: () => importFiles([f.name]) },
+          'Import')
+        : el('span', { class: 'muted-cell' }, 'still downloading…')));
   }
+  const ready = pending.filter(isReady);
   const row = el('div', { class: 'getdata-row' });
-  if (pending.length > 1) {
+  if (ready.length > 1) {
     row.append(el('button', {
-      class: 'btn', onclick: () => importFiles(pending.map((f) => f.name)),
-    }, 'Import all ' + pending.length));
+      class: 'btn', onclick: () => importFiles(ready.map((f) => f.name)),
+    }, 'Import all ' + ready.length));
   }
   row.append(el('button', { class: 'btn', onclick: refreshInbox }, 'Check again'));
   row.append(el('label', { class: 'check' },
@@ -1570,12 +1590,8 @@ async function importFiles(names) {
       clearInterval(inboxTimer);
       inboxTimer = null;
       watchingSince = null;
+      lastImport = { names: result.imported, at: Date.now() };
       await load();   // re-parse and redraw everything, including this section
-      const note = $('#inbox');
-      if (note) {
-        note.prepend(el('div', { class: 'flag-empty imported-note' },
-          'Imported ' + result.imported.join(', ') + ' ✓'));
-      }
       return;
     }
   } catch (err) {

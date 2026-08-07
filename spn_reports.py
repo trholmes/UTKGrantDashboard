@@ -31,7 +31,7 @@ import json
 import re
 import sys
 import webbrowser
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -125,17 +125,10 @@ def parse_date(value):
         raise ValueError("missing date")
     for fmt in ("%Y-%m-%d", "%m-%d-%Y", "%m/%d/%Y"):
         try:
-            return date.fromisoformat(text) if fmt == "%Y-%m-%d" \
-                else date(*_reorder(text, fmt))
+            return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
     raise ValueError(f"unrecognized date: {value!r} (use YYYY-MM-DD)")
-
-
-def _reorder(text, fmt):
-    sep = "-" if fmt == "%m-%d-%Y" else "/"
-    month, day, year = (int(p) for p in text.split(sep))
-    return year, month, day
 
 
 def report_date(value, source=None):

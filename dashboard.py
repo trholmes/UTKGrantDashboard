@@ -48,6 +48,7 @@ DEFAULT_INBOX_DIR = Path.home() / "Downloads"
 
 MAX_CONFIG_BYTES = 2_000_000  # sanity cap on saved-config uploads
 MAX_INBOX_FILES = 25          # newest N candidate exports shown per scan
+SETTLE_SECONDS = 3            # how long a download must sit still to count as done
 
 
 # ---------------------------------------------------------------------------
@@ -720,20 +721,34 @@ def save_config(data_dir, payload):
 # after you clicked a download link).
 
 def scan_inbox(inbox_dir, data_dir):
-    """Recognized CSV exports in the Downloads folder, newest first."""
+    """Recognized CSV exports in the Downloads folder, newest first.
+
+    Everything here tolerates files appearing and vanishing mid-scan: this
+    runs while a browser is writing a download into the very same folder.
+    """
     if inbox_dir is None:
         return []
-    found = []
     try:
-        candidates = [p for p in Path(inbox_dir).iterdir()
-                      if p.suffix.lower() == ".csv" and p.is_file()]
+        candidates = [p for p in Path(inbox_dir).iterdir() if p.suffix.lower() == ".csv"]
     except OSError:
         return []
-    for path in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+
+    stats = []
+    for path in candidates:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if not path.is_file():
+            continue
+        stats.append((path, stat))
+
+    found = []
+    now = datetime.now().timestamp()
+    for path, stat in sorted(stats, key=lambda ps: ps[1].st_mtime, reverse=True):
         kind = classify_csv(path)
         if kind is None:
             continue
-        stat = path.stat()
         existing = Path(data_dir) / path.name
         found.append({
             "name": path.name,
@@ -743,6 +758,9 @@ def scan_inbox(inbox_dir, data_dir):
             "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
             # same name and size in data/ already: importing again is a no-op
             "imported": existing.is_file() and existing.stat().st_size == stat.st_size,
+            # a detail export can be hundreds of MB, and some browsers write
+            # straight to the final name — don't import one mid-download
+            "settled": now - stat.st_mtime >= SETTLE_SECONDS,
         })
         if len(found) >= MAX_INBOX_FILES:
             break
@@ -846,7 +864,30 @@ def make_handler(data_dir, inbox_dir=None):
             ctype = CONTENT_TYPES.get(real.suffix, "application/octet-stream")
             self._send(200, real.read_bytes(), ctype)
 
+        def _local_caller(self):
+            """Refuse anything that isn't this page talking to its own server.
+
+            The server only listens on 127.0.0.1, but a web page you visit can
+            still aim a request at localhost (and a hostname that resolves to
+            127.0.0.1 can carry it further). Checking Host and Origin keeps
+            those out: a page on another origin can neither read your data nor
+            ask for an import.
+            """
+            for header, value in (("Host", self.headers.get("Host")),
+                                  ("Origin", self.headers.get("Origin"))):
+                if not value:
+                    continue
+                host = urlparse(value if "//" in value else "//" + value).hostname
+                if host not in ("127.0.0.1", "::1", "localhost"):
+                    self._send(403, json.dumps(
+                        {"error": f"refusing a request with {header}: {value} — "
+                                  f"open the dashboard at http://127.0.0.1"}))
+                    return False
+            return True
+
         def do_GET(self):
+            if not self._local_caller():
+                return
             parts = urlparse(self.path)
             path = parts.path
             if path == "/":
@@ -874,6 +915,8 @@ def make_handler(data_dir, inbox_dir=None):
                 self._send(404, json.dumps({"error": "not found"}))
 
         def do_POST(self):
+            if not self._local_caller():
+                return
             if self.path not in ("/api/config", "/api/import"):
                 self._send(404, json.dumps({"error": "not found"}))
                 return

@@ -24,11 +24,21 @@ already pull from the university reporting system, and gives you:
 This is the part to check before trusting it with financial data:
 
 * `python3 dashboard.py` starts a web server bound **strictly to 127.0.0.1**
-  — it is only reachable from your own machine.
+  — it is only reachable from your own machine, and it refuses any request
+  that arrives from another page or hostname, so a website you happen to
+  have open cannot talk to it.
 * The tool makes **zero outbound network requests**. No CDN scripts, no
-  fonts, no analytics. Turn wifi off and it works identically.
+  fonts, no analytics. Turn wifi off and it works identically. The
+  download links under **Get fresh data** are composed as text
+  (`spn_reports.py`); clicking one is *your browser* fetching from the
+  university's reporting system, exactly as if you had typed the URL.
 * Your CSVs live in the `data/` folder, which is **.gitignore'd** — they
   cannot be committed or pushed by accident. The repo contains only code.
+* The only folder outside `data/` that the dashboard touches is your
+  **Downloads folder**: it lists the CSVs there that it recognizes as
+  exports, so a fresh download can be copied into `data/` on a click.
+  Nothing else is read, and nothing is ever deleted or moved. Start with
+  `--no-inbox` to switch that off entirely.
 * No dependencies to install: Python 3.9+ standard library only
   (macOS ships with this). The whole tool is a few files of readable
   Python/JS — audit it yourself.
@@ -54,6 +64,11 @@ This is the part to check before trusting it with financial data:
 Two reports feed the dashboard. Any filename ending in `.csv` works — the
 tool identifies each file by its columns, so don't worry about renaming.
 
+**The short version:** open **Get fresh data** in the dashboard header. It
+builds a link that downloads the detail report for your projects in one
+click, and imports the file into `data/` when it lands. The instructions
+below explain what that link does, and how to get the same result by hand.
+
 ### 1. PI Dashboard export — required
 
 This is the budget-vs-actuals summary (one row per project × expenditure
@@ -77,13 +92,48 @@ hire planning), support splits, and exact F&A rates**. Without it
 the dashboard still works, but falls back to linear burn estimates and an
 empty People section.
 
-1. Open the [expenditure detail report](https://fa-ewlq-saasfaprod1.fa.ocs.oraclecloud.com/analytics/saw.dll?bipublisherEntry&Action=open&itemType=.xdo&bipPath=%2FCustom%2FProjects%2FSponsored%20Projects%2FRPT_GMS_007%20-%20Sponsored%20Project%20Detail%20Report.xdo&path=%2Fshared%2FCustom%2FProjects%2FSponsored%20Projects%2FRPT_GMS_007%20-%20Sponsored%20Project%20Detail%20Report.xdo)
-   in Oracle BI Publisher. (If the link goes stale, search BI Publisher
-   for the current "Sponsored Project Detail Report".)
-2. Add **all of your project IDs** (the `SPN…` numbers from the PI
-   Dashboard export) and select the **widest time period available** —
-   more history means better burn rates and seasonality detection.
-3. Export to **CSV** and drop it in `data/`.
+You don't have to click through the report UI for this one. In the
+dashboard, open **Get fresh data** (button in the header):
+
+1. Log into the reporting system in any tab — the link below rides on that
+   session.
+2. Tick the awards you want (all of them, by default) and check the date
+   window. It starts at your oldest award and runs through today; wider is
+   better, since burn rates and seasonality come from this history.
+3. Click **Download detail report CSV**. The reporting system streams the
+   CSV straight to your Downloads folder.
+4. The dashboard notices the new file and imports it into `data/` for you
+   (untick *Import new exports automatically* if you'd rather press the
+   Import button yourself).
+
+If nothing downloads, expand *Nothing downloaded, or using Safari?*: it
+gives you the raw URL to paste into the logged-in tab's address bar, and a
+bookmarklet you can drag onto the Favorites bar and click from inside the
+reporting system — which is the reliable route in Safari, where a link from
+another page can be stripped of the session. That panel also holds the
+report's layout name (`RPT07`): if a link opens the report viewer instead
+of downloading a file, the layout has been renamed, and this is the field
+to correct.
+
+Same thing from a terminal, without the dashboard:
+
+```
+python3 spn_reports.py SPN107048 SPN107049 --from 2025-01-01 --open
+python3 spn_reports.py --from-data data --open      # projects from your exports
+python3 spn_reports.py --from-data data --installer install.html   # bookmarklet
+```
+
+Or do it by hand: open the [expenditure detail report](https://fa-ewlq-saasfaprod1.fa.ocs.oraclecloud.com/analytics/saw.dll?bipublisherEntry&Action=open&itemType=.xdo&bipPath=%2FCustom%2FProjects%2FSponsored%20Projects%2FRPT_GMS_007%20-%20Sponsored%20Project%20Detail%20Report.xdo&path=%2Fshared%2FCustom%2FProjects%2FSponsored%20Projects%2FRPT_GMS_007%20-%20Sponsored%20Project%20Detail%20Report.xdo)
+in Oracle BI Publisher (if the link goes stale, search for the current
+"Sponsored Project Detail Report"), enter all of your `SPN…` numbers and
+the widest date range available, then export to **CSV** and drop it in
+`data/`.
+
+Moved to a different institution's reporting system, or had the report
+renamed under you? Everything about where the report lives — host, catalog
+path, layout name, parameter names, date format — is in the defaults at the
+top of `spn_reports.py`, and any of it can be overridden per-machine by
+dropping a `data/report_source.json` like `{"template": "RPT7"}`.
 
 Notes:
 
@@ -126,6 +176,16 @@ Notes:
 * Scenario edits (people, assignments, expectations, overrides) save to
   `data/config.json` — local and git-ignored, like everything else in
   `data/`.
+
+## If you change the code
+
+```
+python3 -m unittest discover tests
+```
+
+Covers the download-link plumbing (URL shape, date formats, project-number
+parsing, the bookmarklet, and the import endpoints) — the parts where a
+quiet mistake means a CSV full of zeros.
 
 ## Sharing with a colleague
 
