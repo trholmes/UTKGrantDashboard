@@ -7,10 +7,15 @@ them, and serves an interactive dashboard at http://127.0.0.1:<port>.
 Security model (short version, verifiable by reading this file):
   * The server binds strictly to 127.0.0.1 — it is not reachable from the
     network, let alone the internet.
-  * The tool makes zero outbound network requests. No CDNs, no fonts, no
-    analytics. It works identically with wifi off.
+  * This server makes zero outbound network requests. No CDNs, no fonts, no
+    analytics. The "Get fresh data" section composes report URLs as text
+    (see spn_reports.py); clicking one is your own browser downloading from
+    the university system, exactly as if you had typed the URL.
   * Your data stays in the data/ folder on your machine, which is
-    .gitignore'd so it can never be committed by accident.
+    .gitignore'd so it can never be committed by accident. The only other
+    folder touched is your Downloads folder, listed read-only so freshly
+    downloaded exports can be copied into data/ on a click (--no-inbox
+    turns that off).
 
 No dependencies beyond the Python 3 standard library (Python 3.9+).
 
@@ -18,6 +23,8 @@ Usage:
     python3 dashboard.py                 # serve on http://127.0.0.1:8787
     python3 dashboard.py --port 9000
     python3 dashboard.py --data /path/to/exports
+    python3 dashboard.py --downloads /path/to/Downloads
+    python3 dashboard.py --no-inbox      # don't look at the Downloads folder
     python3 dashboard.py --no-browser
 """
 
@@ -25,16 +32,22 @@ import argparse
 import csv
 import json
 import re
+import shutil
 import webbrowser
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+import spn_reports
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 DEFAULT_DATA_DIR = BASE_DIR / "data"
+DEFAULT_INBOX_DIR = Path.home() / "Downloads"
 
 MAX_CONFIG_BYTES = 2_000_000  # sanity cap on saved-config uploads
+MAX_INBOX_FILES = 25          # newest N candidate exports shown per scan
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +669,7 @@ def _build_payload_uncached(data_dir):
 
     flags = compute_flags([p for p in projects if p["inDashboard"]], today_iso)
 
+    source = spn_reports.load_source(data_dir)
     return {
         "today": today_iso,
         "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -663,6 +677,12 @@ def _build_payload_uncached(data_dir):
         "projects": projects,
         "people": people,
         "flags": flags,
+        # what the "Get fresh data" section needs to offer download links
+        "reportSource": {
+            "host": source["host"],
+            "template": source["template"],
+            "piDashboardUrl": source["piDashboardUrl"],
+        },
     }
 
 
@@ -690,6 +710,109 @@ def save_config(data_dir, payload):
 
 
 # ---------------------------------------------------------------------------
+# the inbox: exports sitting in the Downloads folder, waiting to be imported
+# ---------------------------------------------------------------------------
+# A report link downloads to wherever your browser puts downloads, so the last
+# step of "get fresh data" is moving that file into data/. Rather than make the
+# user do it in Finder, we list the CSVs there that we recognize as exports and
+# copy them across on a click. Read-only until then; nothing is imported by
+# itself unless the front-end asks (which it only does for files that appeared
+# after you clicked a download link).
+
+def scan_inbox(inbox_dir, data_dir):
+    """Recognized CSV exports in the Downloads folder, newest first."""
+    if inbox_dir is None:
+        return []
+    found = []
+    try:
+        candidates = [p for p in Path(inbox_dir).iterdir()
+                      if p.suffix.lower() == ".csv" and p.is_file()]
+    except OSError:
+        return []
+    for path in sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True):
+        kind = classify_csv(path)
+        if kind is None:
+            continue
+        stat = path.stat()
+        existing = Path(data_dir) / path.name
+        found.append({
+            "name": path.name,
+            "type": kind,
+            "size": stat.st_size,
+            "mtime": stat.st_mtime,
+            "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            # same name and size in data/ already: importing again is a no-op
+            "imported": existing.is_file() and existing.stat().st_size == stat.st_size,
+        })
+        if len(found) >= MAX_INBOX_FILES:
+            break
+    return found
+
+
+def import_from_inbox(names, inbox_dir, data_dir):
+    """Copy named Downloads-folder exports into the data folder.
+
+    Only plain filenames directly inside the inbox folder are accepted, and
+    only files whose header marks them as one of the two reports — so a stray
+    request can't pull in arbitrary files. The original stays in Downloads.
+    """
+    if inbox_dir is None:
+        raise ValueError("the Downloads folder is not being watched (--no-inbox)")
+    inbox = Path(inbox_dir).resolve()
+    imported, skipped = [], []
+    for raw in list(names)[:MAX_INBOX_FILES]:
+        name = Path(str(raw)).name
+        src = inbox / name
+        if src.parent.resolve() != inbox or not src.is_file() \
+                or src.suffix.lower() != ".csv" or classify_csv(src) is None:
+            skipped.append(name)
+            continue
+        dest = Path(data_dir) / name
+        if dest.is_file() and dest.stat().st_size == src.stat().st_size:
+            skipped.append(name)  # already imported
+            continue
+        # keep both when a same-named export differs: exports merge, and the
+        # newest PI-dashboard file wins per project anyway
+        n = 2
+        while dest.exists():
+            dest = Path(data_dir) / f"{src.stem} ({n}){src.suffix}"
+            n += 1
+        shutil.copy2(src, dest)
+        imported.append(dest.name)
+    return {"imported": imported, "skipped": skipped}
+
+
+def report_links_response(query, data_dir):
+    """Build the download links for /api/report-links from its query string."""
+    projects = spn_reports.normalize_projects(query.get("projects", []))
+    source = spn_reports.load_source(data_dir, template=_one(query, "template"))
+    from_date = _one(query, "from")
+    to_date = _one(query, "to")
+    combined = _one(query, "mode") != "per-project"
+    links = spn_reports.report_links(projects, from_date, to_date,
+                                     combined=combined, source=source)
+    return {
+        "projects": projects,
+        "from": spn_reports.report_date(from_date, source),
+        "to": spn_reports.report_date(to_date or date.today(), source),
+        "combined": combined,
+        "links": links,
+        # to_date omitted on purpose: the bookmarklet re-computes "today" every
+        # time it is clicked, so it keeps working without being regenerated
+        "bookmarklet": spn_reports.make_bookmarklet(
+            projects, from_date, combined=combined, source=source),
+        "template": source["template"],
+    }
+
+
+def _one(query, key):
+    """First value of a query parameter, or None."""
+    values = query.get(key) or []
+    value = (values[0] or "").strip() if values else ""
+    return value or None
+
+
+# ---------------------------------------------------------------------------
 # HTTP server (localhost only)
 # ---------------------------------------------------------------------------
 
@@ -702,7 +825,7 @@ CONTENT_TYPES = {
 }
 
 
-def make_handler(data_dir):
+def make_handler(data_dir, inbox_dir=None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "UTKGrantDashboard/1.0"
 
@@ -724,7 +847,8 @@ def make_handler(data_dir):
             self._send(200, real.read_bytes(), ctype)
 
         def do_GET(self):
-            path = self.path.split("?", 1)[0]
+            parts = urlparse(self.path)
+            path = parts.path
             if path == "/":
                 self._send_file(STATIC_DIR / "index.html")
             elif path.startswith("/static/"):
@@ -735,20 +859,38 @@ def make_handler(data_dir):
                     self._send(200, json.dumps(payload))
                 except Exception as exc:  # surface parse errors in the UI
                     self._send(500, json.dumps({"error": str(exc)}))
+            elif path == "/api/report-links":
+                try:
+                    query = parse_qs(parts.query, keep_blank_values=True)
+                    self._send(200, json.dumps(report_links_response(query, data_dir)))
+                except Exception as exc:
+                    self._send(400, json.dumps({"error": str(exc)}))
+            elif path == "/api/inbox":
+                self._send(200, json.dumps({
+                    "dir": str(inbox_dir) if inbox_dir else None,
+                    "files": scan_inbox(inbox_dir, data_dir),
+                }))
             else:
                 self._send(404, json.dumps({"error": "not found"}))
 
         def do_POST(self):
-            if self.path != "/api/config":
+            if self.path not in ("/api/config", "/api/import"):
                 self._send(404, json.dumps({"error": "not found"}))
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length > MAX_CONFIG_BYTES:
-                    raise ValueError("config too large")
+                    raise ValueError("request too large")
                 body = json.loads(self.rfile.read(length).decode("utf-8"))
-                save_config(data_dir, body)
-                self._send(200, json.dumps({"ok": True}))
+                if self.path == "/api/config":
+                    save_config(data_dir, body)
+                    self._send(200, json.dumps({"ok": True}))
+                else:
+                    names = body.get("names") if isinstance(body, dict) else None
+                    if not isinstance(names, list):
+                        raise ValueError("expected {\"names\": [...]}")
+                    result = import_from_inbox(names, inbox_dir, data_dir)
+                    self._send(200, json.dumps(dict(result, ok=True)))
             except Exception as exc:
                 self._send(400, json.dumps({"error": str(exc)}))
 
@@ -763,13 +905,20 @@ def main():
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--data", type=Path, default=DEFAULT_DATA_DIR,
                     help="folder containing the CSV exports (default: ./data)")
+    ap.add_argument("--downloads", type=Path, default=DEFAULT_INBOX_DIR,
+                    help="where your browser saves downloads, so freshly "
+                         "downloaded exports can be imported with one click "
+                         f"(default: {DEFAULT_INBOX_DIR})")
+    ap.add_argument("--no-inbox", action="store_true",
+                    help="don't look at the downloads folder at all")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
 
     data_dir = args.data
     data_dir.mkdir(parents=True, exist_ok=True)
+    inbox_dir = None if args.no_inbox or not args.downloads.is_dir() else args.downloads
 
-    handler = make_handler(data_dir)
+    handler = make_handler(data_dir, inbox_dir)
     httpd = None
     port = args.port
     for candidate in range(args.port, args.port + 10):

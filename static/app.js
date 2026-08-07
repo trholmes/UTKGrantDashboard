@@ -144,6 +144,11 @@ function setupSections() {
     });
   }
   const collapsed = CFG.ui.collapsed || {};
+  if (collapsed.getdata === undefined) {
+    // wide open on a first run with no exports yet; tucked away once there
+    // is data to look at (the header button re-opens it)
+    collapsed.getdata = DATA.files.some((f) => f.type !== 'unrecognized');
+  }
   document.querySelectorAll('section.collapsible').forEach((sec) => {
     sec.classList.toggle('collapsed', !!collapsed[sec.dataset.key]);
   });
@@ -156,6 +161,7 @@ function renderAll() {
   renderSummary();
   renderPortfolio();
   renderPeople();
+  renderGetData();
 }
 
 function renderStatus() {
@@ -1219,8 +1225,377 @@ function niceStep(raw) {
   return 10 * mag;
 }
 
+/* ----- get fresh data ----- */
+/* Builds the download link for the detail report (the URL itself comes from
+   spn_reports.py via /api/report-links, so there is one source of truth), then
+   watches the Downloads folder so the CSV lands in data/ without a trip
+   through Finder. */
+
+let LINKS = null;          // last /api/report-links response
+let INBOX = null;          // last /api/inbox response
+let inboxTimer = null;     // poll handle, live for a minute after a download
+let watchingSince = null;  // epoch seconds; files newer than this are "new"
+
+function fetchState() {
+  const ui = CFG.ui;
+  ui.fetch = ui.fetch && typeof ui.fetch === 'object' ? ui.fetch : {};
+  const st = ui.fetch;
+  if (!Array.isArray(st.excluded)) {
+    // closed awards start out unchecked; their history is already in hand
+    st.excluded = DATA.projects.filter((p) => !isActive(p)).map((p) => p.id);
+  }
+  if (typeof st.extra !== 'string') st.extra = '';
+  if (typeof st.autoImport !== 'boolean') st.autoImport = true;
+  if (st.mode !== 'per-project') st.mode = 'combined';
+  if (!st.from) st.from = defaultFrom();
+  return st;
+}
+
+function isActive(p) {
+  return p.status.toLowerCase() === 'active'
+    && (!p.end || p.end.slice(0, 7) >= DATA.today.slice(0, 7));
+}
+
+function defaultFrom() {
+  // the widest window worth asking for: back to the oldest award we know of
+  const starts = DATA.projects.map((p) => p.start).filter(Boolean).sort();
+  return starts[0] || (+DATA.today.slice(0, 4) - 3) + '-01-01';
+}
+
+function fetchProjects() {
+  const st = fetchState();
+  const excluded = new Set(st.excluded);
+  const known = DATA.projects.filter((p) => !excluded.has(p.id)).map((p) => p.id);
+  const extra = (st.extra.match(/SPN\d+/gi) || []).map((s) => s.toUpperCase());
+  return [...new Set(known.concat(extra))];
+}
+
+function renderGetData() {
+  const box = $('#getdata');
+  const st = fetchState();
+  box.replaceChildren();
+
+  // step 1 — the budget export, which has to be driven by hand
+  const dash = el('div', { class: 'getdata-step' },
+    el('div', { class: 'step-head' }, el('span', { class: 'step-num' }, '1'),
+      'PI Dashboard export — budgets and balances'),
+    el('div', { class: 'hint' },
+      'Project Summary → your name in Project PI / Manager → export the table '
+      + 'as CSV. This one needs a few clicks in the reporting tool; the link '
+      + 'opens it on the right page.'));
+  if (DATA.reportSource && DATA.reportSource.piDashboardUrl) {
+    dash.append(el('a', {
+      class: 'btn', href: DATA.reportSource.piDashboardUrl,
+      target: '_blank', rel: 'noopener',
+    }, 'Open PI Dashboard ↗'));
+  }
+  box.append(dash);
+
+  // step 2 — the detail export, which is one click
+  const projects = fetchProjects();
+  const chips = el('div', { class: 'chips' });
+  for (const p of DATA.projects) {
+    const on = !st.excluded.includes(p.id);
+    chips.append(el('label', { class: 'chip' + (on ? ' on' : ''), title: p.name },
+      el('input', {
+        type: 'checkbox', checked: on || null,
+        onchange: (e) => {
+          st.excluded = e.target.checked
+            ? st.excluded.filter((id) => id !== p.id)
+            : st.excluded.concat([p.id]);
+          save(); renderGetData();
+        },
+      }),
+      p.id,
+      el('span', { class: 'chip-name' }, p.shortName || ''),
+      isActive(p) ? null : el('span', { class: 'chip-closed' }, 'closed')));
+  }
+
+  const allOn = st.excluded.length === 0;
+  const detail = el('div', { class: 'getdata-step' },
+    el('div', { class: 'step-head' }, el('span', { class: 'step-num' }, '2'),
+      'Expenditure detail report — transactions, salaries, F&A'),
+    el('div', { class: 'hint' },
+      'Pick the projects and the window. Wider is better: burn rates and '
+      + 'seasonality come from this history.'),
+    chips,
+    el('div', { class: 'getdata-row' },
+      el('button', {
+        class: 'btn btn-x',
+        onclick: () => {
+          st.excluded = allOn ? DATA.projects.map((p) => p.id) : [];
+          save(); renderGetData();
+        },
+      }, allOn ? 'none' : 'all'),
+      el('label', { class: 'check' }, 'Also include: ',
+        el('input', {
+          type: 'text', class: 'extra-in', placeholder: 'SPN107048 SPN107049',
+          value: st.extra, size: 24,
+          oninput: (e) => { st.extra = e.target.value; save(); refreshLinks(); },
+        }))),
+    el('div', { class: 'getdata-row' },
+      el('label', { class: 'check' }, 'From ',
+        el('input', {
+          type: 'date', value: st.from,
+          onchange: (e) => { st.from = e.target.value || defaultFrom(); save(); refreshLinks(); },
+        })),
+      el('label', { class: 'check' }, 'through ',
+        el('input', {
+          type: 'date', value: st.to || DATA.today,
+          onchange: (e) => { st.to = e.target.value || null; save(); refreshLinks(); },
+        }))));
+
+  const link = el('a', {
+    class: 'btn primary', id: 'dl-link', href: '#', target: '_blank', rel: 'noopener',
+    onclick: () => { if (LINKS) startWatching(); },
+  }, '⬇ Download detail report CSV');
+  const extraLinks = el('div', { class: 'dl-extra', id: 'dl-extra' });
+  detail.append(el('div', { class: 'getdata-row dl-row' }, link,
+    el('button', {
+      class: 'btn',
+      onclick: (e) => copyLink(e.target),
+    }, 'Copy link'),
+    el('span', { class: 'hint dl-status', id: 'dl-status' }, 'Building link…')),
+    extraLinks,
+    troubleshooting(st));
+  box.append(detail);
+
+  // step 3 — the file has to end up in data/
+  box.append(el('div', { class: 'getdata-step', id: 'inbox-step' },
+    el('div', { class: 'step-head' }, el('span', { class: 'step-num' }, '3'),
+      'Import what you downloaded'),
+    el('div', { id: 'inbox' })));
+
+  refreshLinks();
+  refreshInbox();
+}
+
+function troubleshooting(st) {
+  const urlBox = el('input', { type: 'text', class: 'url-box', id: 'url-box', readonly: '' });
+  const bm = el('a', { class: 'btn bookmarklet', id: 'bm-link', href: '#' },
+    '⬇ Download detail report');
+  return el('details', { class: 'getdata-more' },
+    el('summary', {}, 'Nothing downloaded, or using Safari?'),
+    el('div', { class: 'hint' },
+      'The link only works while you have a live session in the reporting '
+      + 'system — open it and log in, then click again. Safari can also '
+      + 'withhold the session on a link from another page; in that case paste '
+      + 'this URL into the address bar of the logged-in tab:'),
+    urlBox,
+    el('div', { class: 'hint' },
+      'Or install this bookmarklet: drag it onto your Favorites bar '
+      + '(View › Show Favorites Bar), then click it from any page of the '
+      + 'reporting system. It always pulls through today, so it keeps '
+      + 'working next month.'),
+    bm,
+    el('div', { class: 'getdata-row' },
+      el('label', { class: 'check' },
+        el('input', {
+          type: 'checkbox', checked: st.mode === 'per-project' || null,
+          onchange: (e) => {
+            st.mode = e.target.checked ? 'per-project' : 'combined';
+            save(); renderGetData();
+          },
+        }), ' One file per project (if the report rejects a multi-project run)'),
+      el('label', { class: 'check' }, 'Report layout name: ',
+        el('input', {
+          type: 'text', class: 'tpl-in', size: 8,
+          value: st.template || (DATA.reportSource || {}).template || '',
+          title: 'The label on the report’s output tab. If the link opens the '
+            + 'report viewer instead of downloading a file, this is the value '
+            + 'to correct.',
+          onchange: (e) => { st.template = e.target.value.trim() || null; save(); refreshLinks(); },
+        }))));
+}
+
+async function refreshLinks() {
+  const st = fetchState();
+  const status = $('#dl-status');
+  if (!status) return;
+  const projects = fetchProjects();
+  if (!projects.length) {
+    LINKS = null;
+    status.textContent = 'Pick at least one project.';
+    $('#dl-link').removeAttribute('href');
+    return;
+  }
+  const params = new URLSearchParams({ projects: projects.join(','), from: st.from, mode: st.mode });
+  if (st.to) params.set('to', st.to);
+  if (st.template) params.set('template', st.template);
+  try {
+    const res = await fetch('/api/report-links?' + params.toString());
+    const payload = await res.json();
+    if (payload.error) throw new Error(payload.error);
+    LINKS = payload;
+  } catch (err) {
+    LINKS = null;
+    status.textContent = 'Could not build the link: ' + (err.message || err);
+    return;
+  }
+  const first = LINKS.links[0];
+  $('#dl-link').setAttribute('href', first.url);
+  $('#url-box').value = first.url;
+  $('#bm-link').setAttribute('href', LINKS.bookmarklet);
+  status.textContent = `${LINKS.projects.length} project`
+    + `${LINKS.projects.length === 1 ? '' : 's'} · ${LINKS.from} → ${LINKS.to}`
+    + (LINKS.links.length > 1 ? ` · ${LINKS.links.length} files` : '');
+  // per-project mode: the rest of the downloads, one link each
+  const extra = $('#dl-extra');
+  extra.replaceChildren();
+  if (LINKS.links.length > 1) {
+    extra.append(el('div', { class: 'hint' },
+      'One file per project — the button starts the first, then use these:'));
+    for (const l of LINKS.links.slice(1)) {
+      extra.append(el('a', {
+        class: 'btn btn-x', href: l.url, target: '_blank', rel: 'noopener',
+        onclick: () => startWatching(),
+      }, l.label));
+    }
+  }
+}
+
+function copyLink(btn) {
+  if (!LINKS) return;
+  const url = LINKS.links[0].url;
+  const done = () => {
+    const was = btn.textContent;
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = was; }, 1500);
+  };
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(done, () => selectUrlBox());
+  } else {
+    selectUrlBox();
+  }
+}
+
+function selectUrlBox() {
+  // clipboard blocked: open the details and select the URL so ⌘C works
+  const box = $('#url-box');
+  box.closest('details').open = true;
+  box.focus();
+  box.select();
+}
+
+/* ----- the Downloads folder ----- */
+
+function startWatching() {
+  // a download was just started; watch for the file for a minute
+  watchingSince = Date.now() / 1000 - 5;
+  clearInterval(inboxTimer);
+  const until = Date.now() + 60000;
+  inboxTimer = setInterval(() => {
+    if (Date.now() > until) { clearInterval(inboxTimer); inboxTimer = null; }
+    refreshInbox();
+  }, 2000);
+  refreshInbox();
+}
+
+function isNewFile(f) {
+  return watchingSince !== null && f.mtime >= watchingSince && !f.imported;
+}
+
+async function refreshInbox() {
+  if (!$('#inbox')) return;
+  try {
+    const res = await fetch('/api/inbox');
+    INBOX = await res.json();
+  } catch {
+    INBOX = null;
+  }
+  const fresh = (INBOX && INBOX.files || []).filter(isNewFile);
+  if (fresh.length && fetchState().autoImport) {
+    await importFiles(fresh.map((f) => f.name));
+    return;
+  }
+  renderInbox();
+}
+
+function renderInbox() {
+  const box = $('#inbox');
+  if (!box) return;
+  const st = fetchState();
+  box.replaceChildren();
+  if (!INBOX || !INBOX.dir) {
+    box.append(el('div', { class: 'hint' },
+      'Not watching a downloads folder. Move the downloaded CSV into the '
+      + 'data/ folder yourself, then click Reload data. (Point the dashboard '
+      + 'at your downloads folder with --downloads to get one-click imports.)'));
+    return;
+  }
+  const files = INBOX.files || [];
+  const pending = files.filter((f) => !f.imported);
+  box.append(el('div', { class: 'hint' },
+    inboxTimer ? 'Watching ' + INBOX.dir + ' for the download…'
+      : 'Exports found in ' + INBOX.dir + ':'));
+  if (!pending.length) {
+    box.append(el('div', { class: 'flag-empty' },
+      files.length ? 'Everything there is already in your data folder.'
+        : 'Nothing to import yet.'));
+  }
+  for (const f of pending) {
+    box.append(el('div', { class: 'inbox-row' + (isNewFile(f) ? ' fresh' : '') },
+      el('span', { class: 'inbox-name' }, f.name),
+      el('span', { class: 'badge' },
+        f.type === 'detail' ? 'detail report' : 'PI Dashboard'),
+      el('span', { class: 'muted-cell' },
+        f.modified + ' · ' + Math.max(1, Math.round(f.size / 1e6)) + ' MB'),
+      el('button', { class: 'btn btn-x', onclick: () => importFiles([f.name]) },
+        'Import')));
+  }
+  const row = el('div', { class: 'getdata-row' });
+  if (pending.length > 1) {
+    row.append(el('button', {
+      class: 'btn', onclick: () => importFiles(pending.map((f) => f.name)),
+    }, 'Import all ' + pending.length));
+  }
+  row.append(el('button', { class: 'btn', onclick: refreshInbox }, 'Check again'));
+  row.append(el('label', { class: 'check' },
+    el('input', {
+      type: 'checkbox', checked: st.autoImport || null,
+      onchange: (e) => { st.autoImport = e.target.checked; save(); },
+    }), ' Import new exports automatically'));
+  box.append(row);
+}
+
+async function importFiles(names) {
+  const box = $('#inbox');
+  try {
+    const res = await fetch('/api/import', {
+      method: 'POST', body: JSON.stringify({ names }),
+    });
+    const result = await res.json();
+    if (result.error) throw new Error(result.error);
+    if (result.imported.length) {
+      clearInterval(inboxTimer);
+      inboxTimer = null;
+      watchingSince = null;
+      await load();   // re-parse and redraw everything, including this section
+      const note = $('#inbox');
+      if (note) {
+        note.prepend(el('div', { class: 'flag-empty imported-note' },
+          'Imported ' + result.imported.join(', ') + ' ✓'));
+      }
+      return;
+    }
+  } catch (err) {
+    if (box) {
+      box.prepend(el('div', { class: 'hint' }, 'Import failed: ' + (err.message || err)));
+    }
+  }
+  refreshInbox();
+}
+
 /* ---------- wiring ---------- */
 
+$('#getdata-btn').addEventListener('click', () => {
+  const sec = $('#getdata-section');
+  sec.classList.remove('collapsed');
+  CFG.ui.collapsed = CFG.ui.collapsed || {};
+  CFG.ui.collapsed.getdata = false;
+  save();
+  sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 $('#reload-btn').addEventListener('click', load);
 $('#show-closed').addEventListener('change', renderPortfolio);
 $('#show-notes').addEventListener('change', () => {

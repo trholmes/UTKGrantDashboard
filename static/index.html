@@ -14,6 +14,7 @@
   </div>
   <div class="topbar-actions">
     <span id="save-indicator" class="save-indicator" hidden>Saved ✓</span>
+    <button id="getdata-btn" class="btn" title="Build one-click links to download fresh exports">Get fresh data</button>
     <button id="reload-btn" class="btn" title="Re-read the CSV files in the data folder">Reload data</button>
   </div>
 </header>
@@ -54,6 +55,17 @@
         <label class="check"><input type="checkbox" id="show-closed"> Show closed projects</label>
       </div>
       <div id="portfolio" class="cards"></div>
+    </div>
+  </section>
+
+  <section id="getdata-section" class="collapsible" data-key="getdata">
+    <h2><span class="chev">▾</span> Get fresh data</h2>
+    <div class="sec-body">
+      <p class="hint">Two exports feed this dashboard. The transaction detail
+        report can be downloaded in one click — the link below asks the
+        reporting system for your projects and date range and hands you the
+        CSV. Log into the reporting system first, in any tab.</p>
+      <div id="getdata"></div>
     </div>
   </section>
 
