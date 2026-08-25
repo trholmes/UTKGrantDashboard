@@ -1,0 +1,13 @@
+﻿Project Number,Project Name,Project PI / Manager,Project Status,Project Start Date,Project Finish Date,Budget,SUM Direct Cost,SUM Indirect Cost,Committed Cost,Remaining Balance,% of Budget Spent,Expenditure Category
+SPN900001,AGENCY 111111 Doe,"Doe, Jane",Active,01/01/2024,12/31/2027,10000,1234.5,0,,500.0,0.1,01. Salaries & Wages
+SPN900001,AGENCY 111111 Doe,"Doe, Jane",Active,01/01/2024,12/31/2027,11000,1334.5,0,,490.0,0.15,02. Fringe Benefits
+SPN900001,AGENCY 111111 Doe,"Doe, Jane",Active,01/01/2024,12/31/2027,12000,1434.5,0,,480.0,0.2,03. Travel
+SPN900001,AGENCY 111111 Doe,"Doe, Jane",Active,01/01/2024,12/31/2027,13000,1534.5,0,,470.0,0.25,04. Materials & Supplies
+SPN900002,AGENCY 222222 Doe,"Doe, Jane",Active,06/01/2023,05/31/2026,10000,1234.5,0,,500.0,0.1,01. Salaries & Wages
+SPN900002,AGENCY 222222 Doe,"Doe, Jane",Active,06/01/2023,05/31/2026,11000,1334.5,0,,490.0,0.15,02. Fringe Benefits
+SPN900002,AGENCY 222222 Doe,"Doe, Jane",Active,06/01/2023,05/31/2026,12000,1434.5,0,,480.0,0.2,03. Travel
+SPN900002,AGENCY 222222 Doe,"Doe, Jane",Active,06/01/2023,05/31/2026,13000,1534.5,0,,470.0,0.25,04. Materials & Supplies
+SPN900003,AGENCY 333333 Roe,"Roe, Richard",Closed,01/01/2022,12/31/2025,10000,1234.5,0,,500.0,0.1,01. Salaries & Wages
+SPN900003,AGENCY 333333 Roe,"Roe, Richard",Closed,01/01/2022,12/31/2025,11000,1334.5,0,,490.0,0.15,02. Fringe Benefits
+SPN900003,AGENCY 333333 Roe,"Roe, Richard",Closed,01/01/2022,12/31/2025,12000,1434.5,0,,480.0,0.2,03. Travel
+SPN900003,AGENCY 333333 Roe,"Roe, Richard",Closed,01/01/2022,12/31/2025,13000,1534.5,0,,470.0,0.25,04. Materials & Supplies
