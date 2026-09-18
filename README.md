@@ -7,6 +7,11 @@ already pull from the university reporting system, and gives you:
   category, spending pace vs. time elapsed, monthly burn rate, and runway.
 * **Automatic flags** — overspent categories, charges against $0 budget
   lines, awards ending soon with money unspent, on-pace-to-overrun warnings.
+* **Late-renewal tolerance** — a grant doled out year by year can look
+  closed in the exports while the next increment is late. One tick ("Treat
+  as active", on its card or right from the portfolio summary's "not in
+  this summary — why?" list) keeps it in the summary and projections, with
+  an editable expected end date.
 * **Charge lookup** — pick one or more awards (SPNs) and a date window and
   see every transaction that posted to them: a month-by-month grid per
   expenditure type where a charge you expected but don't see stands out as a

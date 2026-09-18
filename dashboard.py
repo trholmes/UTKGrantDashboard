@@ -399,7 +399,7 @@ def compute_flags(projects, today_iso):
             if budgeted > 0 and charged > 1.5 * budgeted:
                 suppress.add(fr["category"])
                 flags.append({
-                    "severity": "critical", "project": p["id"],
+                    "severity": "critical", "project": p["id"], "kind": "fringe_rate",
                     "title": f"{label}: fringe charging far above the budgeted rate",
                     "detail": (f"Fringe is running at {charged*100:.0f}% of salaries vs "
                                f"{budgeted*100:.0f}% budgeted (${fr['spent']-fr['budget']:,.0f} "
@@ -421,13 +421,13 @@ def compute_flags(projects, today_iso):
                 sev, flex = "serious", ""
             if c["budget"] <= 0:
                 flags.append({
-                    "severity": sev, "project": p["id"],
+                    "severity": sev, "project": p["id"], "kind": "no_budget",
                     "title": f"{label}: {c['category']} charged with no budget",
                     "detail": f"${c['spent']:,.0f} spent against a $0 budget line.{flex}",
                 })
             else:
                 flags.append({
-                    "severity": sev, "project": p["id"],
+                    "severity": sev, "project": p["id"], "kind": "overspent",
                     "title": f"{label}: {c['category']} overspent by ${over:,.0f}",
                     "detail": (f"${c['spent']:,.0f} spent of a ${c['budget']:,.0f} budget "
                                f"({c['spent']/c['budget']*100:.0f}%).{flex}"),
@@ -441,7 +441,7 @@ def compute_flags(projects, today_iso):
         days_left = (end - today).days
         if days_left < 0:
             flags.append({
-                "severity": "warning", "project": p["id"],
+                "severity": "warning", "project": p["id"], "kind": "past_end",
                 "title": f"{label}: past its end date but still active",
                 "detail": f"Ended {p['end']} with ${tot['remaining']:,.0f} remaining.",
             })
@@ -454,7 +454,7 @@ def compute_flags(projects, today_iso):
             cats = ", ".join(f"{c['category']} ${c['remaining']:,.0f}" for c in biggest)
             sev = "serious" if days_left <= 90 else "warning"
             flags.append({
-                "severity": sev, "project": p["id"],
+                "severity": sev, "project": p["id"], "kind": "ending_soon",
                 "title": f"{label}: ends in {days_left} days with ${tot['remaining']:,.0f} unspent",
                 "detail": f"Largest unspent: {cats}.",
             })
@@ -469,14 +469,14 @@ def compute_flags(projects, today_iso):
                 overrun = projected_total - tot["budget"]
                 if s_frac / t_frac > 1.08 and overrun > 2000:
                     flags.append({
-                        "severity": "serious", "project": p["id"],
+                        "severity": "serious", "project": p["id"], "kind": "overrun_pace",
                         "title": f"{label}: on pace to overrun by ~${overrun:,.0f}",
                         "detail": (f"{s_frac*100:.0f}% of budget spent with {t_frac*100:.0f}% "
                                    f"of the award period elapsed."),
                     })
                 elif t_frac - s_frac > 0.30 and tot["remaining"] > 5000 and days_left > 180:
                     flags.append({
-                        "severity": "info", "project": p["id"],
+                        "severity": "info", "project": p["id"], "kind": "behind_pace",
                         "title": f"{label}: spending well behind schedule",
                         "detail": (f"{s_frac*100:.0f}% spent vs {t_frac*100:.0f}% of period "
                                    f"elapsed — ${tot['remaining']:,.0f} still available."),

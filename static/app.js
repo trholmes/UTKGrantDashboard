@@ -184,9 +184,13 @@ function renderFlags() {
   const box = $('#flags');
   box.replaceChildren();
   const showNotes = $('#show-notes').checked;
-  const shown = DATA.flags.filter((f) => showNotes || f.severity !== 'info');
-  const hidden = DATA.flags.length - shown.length;
-  if (!DATA.flags.length) {
+  // "past its end date but still active" is exactly what a kept-active late
+  // renewal looks like — no point flagging what the user already marked
+  const flags = DATA.flags.filter((f) =>
+    !(f.kind === 'past_end' && (CFG.overrides[f.project] || {}).forceActive));
+  const shown = flags.filter((f) => showNotes || f.severity !== 'info');
+  const hidden = flags.length - shown.length;
+  if (!flags.length) {
     box.append(el('div', { class: 'flag-empty' }, 'No issues flagged. \u{1F389}'));
     return;
   }
@@ -206,11 +210,11 @@ function renderFlags() {
 /* ----- portfolio summary ----- */
 
 function grantFilter() {
-  // the award selection scoping the summary, cards, and people graying
-  const curMonth = DATA.today.slice(0, 7);
+  // the award selection scoping the summary, cards, and people graying;
+  // isActive honours the per-award "treat as active" override, and
+  // effectiveEnd supplies the month its money lasts through
   const all = DATA.projects.filter((p) =>
-    p.inDashboard && p.status.toLowerCase() === 'active'
-    && p.end && p.end.slice(0, 7) >= curMonth);
+    p.inDashboard && isActive(p) && effectiveEnd(p));
   const excluded = new Set((CFG.ui && CFG.ui.excluded) || []);
   const selected = all.filter((p) => !excluded.has(p.id));
   return {
@@ -225,7 +229,11 @@ function renderSummary() {
   box.replaceChildren();
   const curMonth = DATA.today.slice(0, 7);
   const filter = grantFilter();
-  if (!filter.all.length) return;
+  const missingNote = missingAwardsNote(filter);
+  if (!filter.all.length) {
+    if (missingNote) box.append(missingNote);
+    return;
+  }
 
   // checkbox chips: which awards feed this summary (and show as cards)
   box.append(el('div', { class: 'grant-filter' },
@@ -239,6 +247,7 @@ function renderSummary() {
           save(); renderAll();
         },
       }), ` ${p.shortName}`))));
+  if (missingNote) box.append(missingNote);
 
   const active = filter.selected;
   const selectedSet = filter.selectedSet;
@@ -398,8 +407,7 @@ function renderSummary() {
       const ov = CFG.overrides[p.id] || {};
       const extra = ov.expectedExtra || 0;
       extraTotal += extra;
-      let end = p.end.slice(0, 7);
-      if (ov.expectedEnd && ov.expectedEnd > end) end = ov.expectedEnd;
+      const end = effectiveEnd(p);
       const partial = (p.monthly || {})[curMonth] || 0;
       return { end, bal: Math.max(0, p.totals.remaining - p.totals.committed + partial) + extra };
     })
@@ -620,9 +628,48 @@ function renderSummary() {
   }
   card.append(legend);
   card.append(el('div', { class: 'burn-line' }, 'Awards end: ',
-    active.slice().sort((a, b) => (a.end < b.end ? -1 : 1))
-      .map((p) => `${p.shortName} ${fmtMonth(p.end.slice(0, 7))}`).join(' · ')));
+    active.slice().sort((a, b) => (effectiveEnd(a) < effectiveEnd(b) ? -1 : 1))
+      .map((p) => `${p.shortName} ${fmtMonth(effectiveEnd(p))}`
+        + (effectiveEnd(p) !== (p.end || '').slice(0, 7) ? ' (expected)' : ''))
+      .join(' · ')));
   box.append(card);
+}
+
+function missingAwardsNote(filter) {
+  // why an award someone can see elsewhere (the charge lookup, the export)
+  // is absent from the summary — with the one-click fix where there is one
+  const shown = new Set(filter.all.map((p) => p.id));
+  const missing = DATA.projects.filter((p) => !shown.has(p.id));
+  if (!missing.length) return null;
+  const curMonth = DATA.today.slice(0, 7);
+  const items = missing.map((p) => {
+    const row = el('div', { class: 'missing-row' },
+      el('b', {}, p.id),
+      p.shortName && p.shortName !== p.id ? ` ${p.shortName}` : '', ' — ');
+    if (!p.inDashboard) {
+      row.append('only in the transaction detail export; without budget rows '
+        + 'there are no balances to project. Re-export the PI Dashboard with '
+        + 'this project included.');
+    } else {
+      const why = p.status.toLowerCase() !== 'active'
+        ? `the export marks it “${p.status}”`
+        : (p.end && p.end.slice(0, 7) < curMonth)
+          ? `its end date (${p.end}) has passed`
+          : 'the export gives it no end date';
+      row.append(why + '. ', el('button', {
+        class: 'btn btn-x',
+        title: 'Include this award everywhere as if it were active — for late '
+          + 'year-by-year renewals. The projection extends a year past the '
+          + 'recorded end; adjust that with “new end” on its card.',
+        onclick: () => setForceActive(p, true),
+      }, 'Treat as active'));
+    }
+    return row;
+  });
+  return el('details', { class: 'missing-awards' },
+    el('summary', {}, `${missing.length} award${missing.length === 1 ? '' : 's'}`
+      + ' not in this summary — why?'),
+    items);
 }
 
 /* ----- portfolio ----- */
@@ -649,8 +696,7 @@ function renderPortfolio() {
   const showClosed = $('#show-closed').checked;
   const hidden = new Set((CFG.ui && CFG.ui.excluded) || []);
   const projects = DATA.projects.filter(
-    (p) => p.inDashboard && !hidden.has(p.id)
-      && (showClosed || p.status.toLowerCase() === 'active'));
+    (p) => p.inDashboard && !hidden.has(p.id) && (showClosed || isActive(p)));
 
   // shared axes for all sparklines: same month range and same $ scale,
   // so the little plots are comparable across awards
@@ -675,12 +721,20 @@ function renderPortfolio() {
   for (const p of projects) {
     const tf = timeFrac(p);
     const sf = p.totals.budget > 0 ? p.totals.spent / p.totals.budget : null;
-    const active = p.status.toLowerCase() === 'active';
+    const active = isActive(p);
+    const forced = !!(CFG.overrides[p.id] || {}).forceActive;
 
     const card = el('div', { class: 'card' });
     card.append(el('div', { class: 'card-head' },
       el('h3', {}, p.shortName),
-      el('span', { class: 'status-chip' + (active ? '' : ' closed') }, p.status)));
+      forced
+        ? el('span', {
+            class: 'status-chip kept',
+            title: `The export says “${p.status}”`
+              + (p.end && p.end < DATA.today ? `, ended ${p.end}` : '')
+              + ' — kept active by you (untick "Treat as active" below to undo)',
+          }, 'Kept active')
+        : el('span', { class: 'status-chip' + (active ? '' : ' closed') }, p.status)));
     // full-width so it can run under the status chip without wrapping
     card.append(el('div', { class: 'proj-id' },
       `${p.id} · ${p.start ?? '?'} → ${p.end ?? '?'}`,
@@ -738,8 +792,7 @@ function renderPortfolio() {
     // the new end and adds the funds, mirroring the summary's treatment
     const ov = CFG.overrides[p.id] || (CFG.overrides[p.id] = {});
     const extra = active ? (ov.expectedExtra || 0) : 0;
-    let effEnd = endMonth;
-    if (active && endMonth && ov.expectedEnd && ov.expectedEnd > endMonth) effEnd = ov.expectedEnd;
+    const effEnd = active ? effectiveEnd(p) : endMonth;
     const canProject = active && effEnd && effEnd > curMonth && cardModel;
     if ((hasMonthly && sparkDomain.length) || canProject) {
       // when projecting, the current (partial) month is modeled rather than
@@ -833,7 +886,9 @@ function renderPortfolio() {
         : p.burn.recent != null ? `avg of ${p.burn.recentMonths.map(fmtMonth).join(', ')}`
         : 'linear average over the award';
       const runway = p.totals.remaining / burn;
-      const monthsLeft = p.end ? monthDiff(curMonth, p.end.slice(0, 7)) : null;
+      // months left to the effective end — the recorded end, an expected
+      // extension, or "kept active" — matching what the projection uses
+      const monthsLeft = effEnd ? monthDiff(curMonth, effEnd) : null;
       let runTxt = `runway ≈ ${runway.toFixed(0)} mo`;
       if (monthsLeft !== null) runTxt += ` (award has ${monthsLeft} mo left)`;
       const extra = (p.burn.avg12 != null && p.burn.recent != null)
@@ -872,6 +927,23 @@ function renderPortfolio() {
       card.append(el('div', { class: 'spark-block' },
         el('div', { class: 'spark-title' }, "Who's on this grant"),
         el('div', { class: 'burn-line' }, 'No salaries charged in the export window.')));
+    }
+
+    // late year-by-year renewals: the export can say "closed" (or carry a
+    // past end date) while the next increment is simply late — one tick
+    // keeps the award in the summary, projections, and defaults
+    const looksClosed = p.status.toLowerCase() !== 'active'
+      || (p.end && p.end.slice(0, 7) < curMonth);
+    if (looksClosed) {
+      card.append(el('label', { class: 'check keep-active' },
+        el('input', {
+          type: 'checkbox', checked: forced || null,
+          onchange: (e) => setForceActive(p, e.target.checked),
+        }),
+        ' Treat as active — the export '
+        + (p.status.toLowerCase() !== 'active'
+          ? `marks this “${p.status}”` : `says it ended ${p.end}`)
+        + ', but a late renewal looks exactly like this.'));
     }
 
     // manually entered future funding (persists in config.json; feeds the
@@ -1554,8 +1626,35 @@ function fetchState() {
 }
 
 function isActive(p) {
+  // the per-award "treat as active" override wins: year-by-year grants often
+  // look closed in the export while the next increment is late
+  if (((CFG && CFG.overrides) || {})[p.id]?.forceActive) return true;
   return p.status.toLowerCase() === 'active'
     && (!p.end || p.end.slice(0, 7) >= DATA.today.slice(0, 7));
+}
+
+function effectiveEnd(p) {
+  // the month an award's money can be spent through: the report's end date,
+  // extended by the "new end" override; an award kept active past its
+  // recorded end lasts at least through the current month
+  const ov = ((CFG && CFG.overrides) || {})[p.id] || {};
+  let end = p.end ? p.end.slice(0, 7) : null;
+  if (ov.expectedEnd && (!end || ov.expectedEnd > end)) end = ov.expectedEnd;
+  if (ov.forceActive && (!end || end < DATA.today.slice(0, 7))) {
+    end = DATA.today.slice(0, 7);
+  }
+  return end;
+}
+
+function setForceActive(p, on) {
+  const ov = CFG.overrides[p.id] || (CFG.overrides[p.id] = {});
+  ov.forceActive = on || null;
+  // a late renewal usually means another year: default the projection end a
+  // year past the recorded end — visible and editable as "new end" on the card
+  if (on && !ov.expectedEnd && p.end && p.end.slice(0, 7) < DATA.today.slice(0, 7)) {
+    ov.expectedEnd = monthAdd(p.end.slice(0, 7), 12);
+  }
+  save(); renderAll();
 }
 
 function defaultFrom() {
