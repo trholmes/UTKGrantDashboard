@@ -652,7 +652,7 @@ function missingAwardsNote(filter) {
         + 'this project included.');
     } else {
       const why = p.status.toLowerCase() !== 'active'
-        ? `the export marks it “${p.status}”`
+        ? `the export marks it “${p.status}”${p.end ? ` (ended ${p.end})` : ''}`
         : (p.end && p.end.slice(0, 7) < curMonth)
           ? `its end date (${p.end}) has passed`
           : 'the export gives it no end date';
