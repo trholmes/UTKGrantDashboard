@@ -234,6 +234,31 @@ svg .gridline { stroke: var(--grid); stroke-width: 1; }
 svg .zeroline { stroke: var(--baseline); stroke-width: 1; }
 svg .axis { stroke: var(--baseline); stroke-width: 1.5; }
 
+/* ---- charge lookup ---- */
+
+.charges-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 16px; box-shadow: var(--shadow);
+}
+input.charges-filter { width: 170px; font-size: 12.5px; }
+.charges-headline { margin-top: 12px; font-size: 13px; }
+.charges-coverage {
+  color: color-mix(in srgb, var(--warning) 60%, var(--ink));
+  font-size: 12.5px; margin: 10px 0 0; max-width: 80ch;
+}
+.charges-wrap { overflow-x: auto; margin-top: 4px; }
+table.charges-grid, table.charges-lines { width: auto; min-width: 100%; }
+table.charges-grid td, table.charges-grid th,
+table.charges-lines td, table.charges-lines th { padding: 3px 10px 3px 0; }
+table.charges-grid tr.cat-row td {
+  text-align: left; color: var(--muted); font-size: 11px; font-weight: 650;
+  letter-spacing: 0.04em; text-transform: uppercase; padding-top: 8px;
+}
+table.charges-lines td, table.charges-lines th { text-align: left; }
+table.charges-lines td:last-child, table.charges-lines th:last-child { text-align: right; }
+td.charge-label { max-width: 30ch; overflow: hidden; text-overflow: ellipsis; }
+.cell-empty { color: var(--grid); }
+
 /* ---- get fresh data ---- */
 
 .getdata-step {
