@@ -156,15 +156,21 @@ def parse_pi_dashboard(path):
     return rows
 
 
+def _cols_with(headers, prefix, words):
+    """Header columns on one side (L_/NL_) whose name contains any of words."""
+    return [h for h in headers or []
+            if (h or "").upper().startswith(prefix)
+            and any(w in h.upper() for w in words)]
+
+
 def _desc_columns(headers, prefix):
     """Columns on one side (L_/NL_) that can hold a line description — an
     expense report title, a PO text, a payroll comment. Report layouts get
-    renamed, so match on shape instead of hard-coding one column name; when
-    several exist, a TITLE outranks a DESC outranks a COMMENT."""
-    rank = {"TITLE": 0, "DESC": 1, "COMMENT": 2}
-    hits = [h for h in headers or []
-            if (h or "").upper().startswith(prefix)
-            and any(w in h.upper() for w in rank)]
+    renamed, so match on shape instead of hard-coding one column name (the
+    live RPT07 layout calls it NL_EXP_CMNT); when several exist, a TITLE
+    outranks a DESC outranks a COMMENT/CMNT."""
+    rank = {"TITLE": 0, "DESC": 1, "COMMENT": 2, "CMNT": 2}
+    hits = _cols_with(headers, prefix, rank)
     hits.sort(key=lambda h: min(v for w, v in rank.items() if w in h.upper()))
     return hits
 
@@ -189,6 +195,7 @@ def parse_detail(path, labor, nonlabor, meta):
         reader = csv.DictReader(f)
         l_desc_cols = _desc_columns(reader.fieldnames, "L_")
         nl_desc_cols = _desc_columns(reader.fieldnames, "NL_")
+        nl_vend_cols = _cols_with(reader.fieldnames, "NL_", ("VEND",))
         for r in reader:
             proj = (r.get("PROJ_NUMBER") or "").strip()
             if not proj:
@@ -231,6 +238,7 @@ def parse_detail(path, labor, nonlabor, meta):
                         "date": fdate(r.get("L_EXP_DATE")),
                         "person": (r.get("L_PER_NAME") or "").strip(),
                         "desc": l_desc,
+                        "vendor": "",
                         "amount": l_amt or 0.0,
                     }
 
@@ -239,11 +247,12 @@ def parse_detail(path, labor, nonlabor, meta):
             nl_amt = fnum(r.get("NL_EXP_COST"))
             if nl_trx or nl_amt is not None:
                 nl_desc = _first_desc(r, nl_desc_cols)
+                nl_vend = _first_desc(r, nl_vend_cols)
                 key = (proj, nl_trx,
                        (r.get("NL_EXP_DATE") or "").strip(),
                        (r.get("NL_EXP_TYPE") or "").strip(),
                        (r.get("NL_PER_NAME") or "").strip(),
-                       r.get("NL_EXP_COST"), nl_desc)
+                       r.get("NL_EXP_COST"), nl_desc, nl_vend)
                 if key not in nonlabor:
                     nonlabor[key] = {
                         "project": proj,
@@ -254,6 +263,7 @@ def parse_detail(path, labor, nonlabor, meta):
                         "date": fdate(r.get("NL_EXP_DATE")),
                         "person": (r.get("NL_PER_NAME") or "").strip(),
                         "desc": nl_desc,
+                        "vendor": nl_vend,
                         "amount": nl_amt or 0.0,
                     }
 
@@ -874,7 +884,7 @@ def charges_response(query, data_dir):
             continue
         charges.append({k: t[k] for k in
                         ("project", "date", "kind", "trx", "category", "type",
-                         "person", "desc", "amount")})
+                         "person", "desc", "vendor", "amount")})
         total += t["amount"]
     # newest first; undated lines sink to the bottom
     charges.sort(key=lambda c: (c["date"] is not None, c["date"] or ""), reverse=True)

@@ -1356,7 +1356,7 @@ async function refreshCharges() {
 
 function chargeMatches(c, q) {
   const hay = `${c.project} ${c.date || ''} ${c.category} ${c.type} ${c.person} `
-    + `${c.trx} ${c.desc || ''} ${c.amount}`;
+    + `${c.trx} ${c.desc || ''} ${c.vendor || ''} ${c.amount}`;
   return q.split(/\s+/).every((w) => !w || hay.toLowerCase().includes(w));
 }
 
@@ -1495,12 +1495,14 @@ function renderChargesResults() {
   const CAP = 200;
   const shown = chargesShowAll ? charges : charges.slice(0, CAP);
   const hasDesc = charges.some((c) => c.desc);
+  const hasVend = charges.some((c) => c.vendor);
   const tbl = el('table', { class: 'cats charges-lines' },
     el('tr', {},
       el('th', {}, 'Date'),
       multi ? el('th', {}, 'Award') : null,
       el('th', {}, 'Category'), el('th', {}, 'Type'),
       hasDesc ? el('th', {}, 'Description') : null,
+      hasVend ? el('th', {}, 'Vendor') : null,
       el('th', {}, 'Person'), el('th', {}, 'Trx #'), el('th', {}, 'Amount')));
   for (const c of shown) {
     tbl.append(el('tr', {},
@@ -1509,6 +1511,7 @@ function renderChargesResults() {
       el('td', {}, c.category),
       el('td', {}, c.type),
       hasDesc ? el('td', { class: 'desc-cell', title: c.desc || '' }, c.desc || '') : null,
+      hasVend ? el('td', { class: 'desc-cell', title: c.vendor || '' }, c.vendor || '') : null,
       el('td', {}, c.person),
       el('td', { class: 'muted-cell' }, c.trx),
       el('td', { class: c.amount < -0.005 ? 'neg' : '' }, fmtCents.format(c.amount))));

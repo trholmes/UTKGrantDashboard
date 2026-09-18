@@ -149,26 +149,44 @@ class ChargesResponse(unittest.TestCase):
     def test_no_description_column_means_empty_descriptions(self):
         payload = self.lookup(project="SPN900001")
         self.assertTrue(all(c["desc"] == "" for c in payload["charges"]))
+        self.assertTrue(all(c["vendor"] == "" for c in payload["charges"]))
 
-    def test_descriptions_are_picked_up_by_column_shape(self):
-        # the layout's name for the column has changed before, so anything
-        # L_/NL_-prefixed containing TITLE/DESC/COMMENT counts
+    def test_descriptions_and_vendor_are_picked_up_by_column_shape(self):
+        # the live RPT07 layout uses NL_EXP_CMNT and NL_VEND_NAME, but names
+        # have changed before — anything L_/NL_-prefixed containing
+        # TITLE/DESC/COMMENT/CMNT (or VEND) counts
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "RPT_TEST - Detail.csv"
             with open(path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                w.writerow(DETAIL_COLS + ["L_EXP_COMMENT", "NL_TRX_DESC", "NL_EXP_TITLE"])
+                w.writerow(DETAIL_COLS
+                           + ["L_EXP_COMMENT", "NL_EXP_CMNT", "NL_EXP_TITLE",
+                              "NL_VEND_NAME"])
                 w.writerow(labor_row("SPN900001", "10001", "Riley Park", "2026-06-28",
                                      "GTA GA GRA Salaries", "Salaries & Wages", "2600.00")
-                           + ["June effort adjustment", "", ""])
+                           + ["June effort adjustment", "", "", ""])
                 w.writerow(nonlabor_row("SPN900001", "20001", "", "2026-07-15",
                                         "Domestic Travel", "Travel", "812.34")
-                           + ["", "ER0012345 conference travel", "APS April Meeting"])
+                           + ["", "ER0012345 conference travel", "APS April Meeting",
+                              "World Travel Service"])
             payload = dashboard.charges_response({"project": ["SPN900001"]}, Path(tmp))
-        desc = {c["trx"]: c["desc"] for c in payload["charges"]}
-        self.assertEqual(desc["10001"], "June effort adjustment")
-        # a TITLE column outranks a DESC column when both are filled
-        self.assertEqual(desc["20001"], "APS April Meeting")
+        by_trx = {c["trx"]: c for c in payload["charges"]}
+        self.assertEqual(by_trx["10001"]["desc"], "June effort adjustment")
+        # a TITLE column outranks a COMMENT/CMNT column when both are filled
+        self.assertEqual(by_trx["20001"]["desc"], "APS April Meeting")
+        self.assertEqual(by_trx["20001"]["vendor"], "World Travel Service")
+
+    def test_the_live_layouts_cmnt_column_alone_is_enough(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "RPT_TEST - Detail.csv"
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(DETAIL_COLS + ["NL_EXP_CMNT"])
+                w.writerow(nonlabor_row("SPN900001", "20001", "", "2026-07-15",
+                                        "Domestic Travel", "Travel", "812.34")
+                           + ["ER0012345 conference travel"])
+            payload = dashboard.charges_response({"project": ["SPN900001"]}, Path(tmp))
+        self.assertEqual(payload["charges"][0]["desc"], "ER0012345 conference travel")
 
     def test_detail_window_reaches_the_front_end(self):
         payload = dashboard.build_payload(self.data)

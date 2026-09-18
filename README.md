@@ -10,9 +10,9 @@ already pull from the university reporting system, and gives you:
 * **Charge lookup** — pick one or more awards (SPNs) and a date window and
   see every transaction that posted to them: a month-by-month grid per
   expenditure type where a charge you expected but don't see stands out as a
-  gap, plus the full searchable line-by-line list with transaction numbers
-  and each line's description (the expense report title, when the export
-  carries a description/title/comment column).
+  gap, plus the full searchable line-by-line list with transaction numbers,
+  each line's description (the expense report comment, so you can see what a
+  trip was for), and the vendor.
 * **Hiring & departure planning in the People table** — people are seeded
   automatically from the payroll lines in your detail export, with their
   real salaries, fringe rates, and support splits. Add a person and pick
