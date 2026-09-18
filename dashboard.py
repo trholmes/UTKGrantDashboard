@@ -200,6 +200,7 @@ def parse_detail(path, labor, nonlabor, meta):
                     labor[key] = {
                         "project": proj,
                         "kind": "labor",
+                        "trx": l_trx,
                         "category": (r.get("L_EXP_CAT") or "").strip(),
                         "type": (r.get("L_EXP_TYPE") or "").strip(),
                         "date": fdate(r.get("L_EXP_DATE")),
@@ -220,6 +221,7 @@ def parse_detail(path, labor, nonlabor, meta):
                     nonlabor[key] = {
                         "project": proj,
                         "kind": "nonlabor",
+                        "trx": nl_trx,
                         "category": (r.get("NL_EXP_CAT") or "").strip(),
                         "type": (r.get("NL_EXP_TYPE") or "").strip(),
                         "date": fdate(r.get("NL_EXP_DATE")),
@@ -458,24 +460,32 @@ def short_name(full_name, pi_names):
 
 
 # Large detail exports (the cartesian product can reach hundreds of MB) take
-# a few seconds to parse, so cache the parsed payload keyed on the CSV files'
+# a few seconds to parse, so cache the parsed results keyed on the CSV files'
 # (path, mtime, size) — a reload only re-parses when a file actually changes.
-_payload_cache = {"key": None, "payload": None}
+# The transaction list rides along for /api/charges, which filters it live.
+_payload_cache = {"key": None, "payload": None, "transactions": None}
 
 
-def build_payload(data_dir):
+def _ensure_cache(data_dir):
     key = tuple(sorted(
         (str(p), p.stat().st_mtime, p.stat().st_size)
         for p in Path(data_dir).glob("*.csv")
     )) + (date.today().isoformat(),)
-    if _payload_cache["key"] == key:
-        payload = dict(_payload_cache["payload"])
-        payload["config"] = load_config(data_dir)  # config always fresh
-        return payload
-    payload = _build_payload_uncached(data_dir)
-    _payload_cache["key"] = key
-    _payload_cache["payload"] = payload
-    return dict(payload, config=load_config(data_dir))
+    if _payload_cache["key"] != key:
+        payload, transactions = _build_payload_uncached(data_dir)
+        _payload_cache.update(key=key, payload=payload, transactions=transactions)
+    return _payload_cache
+
+
+def build_payload(data_dir):
+    payload = dict(_ensure_cache(data_dir)["payload"])
+    payload["config"] = load_config(data_dir)  # config always fresh
+    return payload
+
+
+def load_transactions(data_dir):
+    """Every de-duplicated transaction from the detail exports (cached)."""
+    return _ensure_cache(data_dir)["transactions"]
 
 
 def _build_payload_uncached(data_dir):
@@ -642,6 +652,11 @@ def _build_payload_uncached(data_dir):
             },
             "hasDetail": pid in meta,
             "inDashboard": pid in dash_by_project,
+            # the accounting-date window the detail export was pulled for —
+            # the charge lookup warns when asked about months outside it
+            "detailWindow": ([min(w[0] for w in dmeta["windows"]),
+                              max(w[1] for w in dmeta["windows"])]
+                             if dmeta.get("windows") else None),
         })
 
     # people estimates need the export coverage window length
@@ -684,7 +699,7 @@ def _build_payload_uncached(data_dir):
             "template": source["template"],
             "piDashboardUrl": source["piDashboardUrl"],
         },
-    }
+    }, transactions
 
 
 # ---------------------------------------------------------------------------
@@ -800,6 +815,49 @@ def import_from_inbox(names, inbox_dir, data_dir):
     return {"imported": imported, "skipped": skipped}
 
 
+def charges_response(query, data_dir):
+    """Filtered transaction list for /api/charges (the charge lookup section).
+
+    ?project=SPN107048&from=2026-06-01&to=2026-09-18 — one project, inclusive
+    date bounds (both optional). Charges the export left undated are always
+    included and counted separately, so nothing disappears silently.
+    """
+    codes = spn_reports.normalize_projects(query.get("project", []))
+    if len(codes) != 1:
+        raise ValueError("pass exactly one project, e.g. ?project=SPN107048")
+    project = codes[0]
+    from_iso = to_iso = None
+    if _one(query, "from"):
+        from_iso = spn_reports.parse_date(_one(query, "from")).isoformat()
+    if _one(query, "to"):
+        to_iso = spn_reports.parse_date(_one(query, "to")).isoformat()
+    if from_iso and to_iso and to_iso < from_iso:
+        raise ValueError("the end of the date window is before its start")
+
+    charges, undated, total = [], 0, 0.0
+    for t in load_transactions(data_dir):
+        if t["project"] != project:
+            continue
+        if t["date"] is None:
+            undated += 1
+        elif (from_iso and t["date"] < from_iso) or (to_iso and t["date"] > to_iso):
+            continue
+        charges.append({k: t[k] for k in
+                        ("date", "kind", "trx", "category", "type", "person", "amount")})
+        total += t["amount"]
+    # newest first; undated lines sink to the bottom
+    charges.sort(key=lambda c: (c["date"] is not None, c["date"] or ""), reverse=True)
+    return {
+        "project": project,
+        "from": from_iso,
+        "to": to_iso,
+        "count": len(charges),
+        "undated": undated,
+        "total": round(total, 2),
+        "charges": charges,
+    }
+
+
 def report_links_response(query, data_dir):
     """Build the download links for /api/report-links from its query string."""
     projects = spn_reports.normalize_projects(query.get("projects", []))
@@ -904,6 +962,12 @@ def make_handler(data_dir, inbox_dir=None):
                 try:
                     query = parse_qs(parts.query, keep_blank_values=True)
                     self._send(200, json.dumps(report_links_response(query, data_dir)))
+                except Exception as exc:
+                    self._send(400, json.dumps({"error": str(exc)}))
+            elif path == "/api/charges":
+                try:
+                    query = parse_qs(parts.query, keep_blank_values=True)
+                    self._send(200, json.dumps(charges_response(query, data_dir)))
                 except Exception as exc:
                     self._send(400, json.dumps({"error": str(exc)}))
             elif path == "/api/inbox":

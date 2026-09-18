@@ -163,6 +163,7 @@ function renderAll() {
   renderSummary();
   renderPortfolio();
   renderPeople();
+  renderCharges();
   renderGetData();
 }
 
@@ -1225,6 +1226,251 @@ function niceStep(raw) {
   const mag = Math.pow(10, Math.floor(Math.log10(Math.max(1, raw))));
   for (const m of [1, 2, 2.5, 5, 10]) if (raw <= m * mag) return m * mag;
   return 10 * mag;
+}
+
+/* ----- charge lookup ----- */
+/* Pick an award and a date window; /api/charges returns every transaction
+   from the detail exports that posted to it. Rendered two ways: a
+   month-by-type grid (a charge you expected but don't see is a visible gap)
+   and the full line-by-line list. */
+
+let CHARGES = null;       // last /api/charges response, tagged with its inputs
+let chargesText = '';     // client-side text filter (not persisted)
+let chargesShowAll = false;
+let chargesSeq = 0;       // drop out-of-order fetch responses
+
+const fmtCents = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+
+function chargesState() {
+  const ui = CFG.ui;
+  ui.charges = ui.charges && typeof ui.charges === 'object' ? ui.charges : {};
+  const st = ui.charges;
+  const withDetail = DATA.projects.filter((p) => p.hasDetail);
+  if (!withDetail.some((p) => p.id === st.project)) {
+    const first = withDetail.find(isActive) || withDetail[0];
+    st.project = first ? first.id : '';
+  }
+  // "the last few months" is the common question, so that's the default
+  if (typeof st.from !== 'string' || !st.from) {
+    st.from = monthAdd(DATA.today.slice(0, 7), -3) + '-01';
+  }
+  if (typeof st.to !== 'string') st.to = '';
+  return st;
+}
+
+function renderCharges() {
+  const box = $('#charges');
+  box.replaceChildren();
+  const withDetail = DATA.projects.filter((p) => p.hasDetail);
+  if (!withDetail.length) {
+    box.append(el('p', { class: 'hint' },
+      'No transaction detail loaded yet — download the expenditure detail '
+      + 'report (under Get fresh data) and every charge becomes searchable here.'));
+    return;
+  }
+  const st = chargesState();
+  const card = el('div', { class: 'charges-card' });
+  card.append(el('div', { class: 'getdata-row', style: 'margin-top:0' },
+    el('label', { class: 'check' }, 'Award ',
+      el('select', {
+        onchange: (e) => { st.project = e.target.value; save(); refreshCharges(); },
+      }, withDetail.map((p) => el('option', {
+        value: p.id, selected: p.id === st.project || null,
+      }, `${p.id} — ${p.shortName}`)))),
+    el('label', { class: 'check' }, 'from ',
+      el('input', {
+        type: 'date', value: st.from,
+        onchange: (e) => { st.from = e.target.value || ''; save(); refreshCharges(); },
+      })),
+    el('label', { class: 'check' }, 'through ',
+      el('input', {
+        type: 'date', value: st.to || DATA.today,
+        title: 'leave at today to include everything since the from-date',
+        onchange: (e) => { st.to = e.target.value || ''; save(); refreshCharges(); },
+      })),
+    el('label', { class: 'check' }, 'filter ',
+      el('input', {
+        type: 'search', class: 'charges-filter',
+        placeholder: 'type, person, trx #…', value: chargesText,
+        oninput: (e) => { chargesText = e.target.value; chargesShowAll = false; renderChargesResults(); },
+      }))));
+  card.append(el('div', { id: 'charges-results' }));
+  box.append(card);
+  refreshCharges();
+}
+
+async function refreshCharges() {
+  const out = $('#charges-results');
+  if (!out) return;
+  const st = chargesState();
+  if (!st.project) return;
+  // same award, window, and underlying data as last time: just re-render
+  const wanted = JSON.stringify([st.project, st.from, st.to, DATA.generated]);
+  if (CHARGES && CHARGES.wanted === wanted) { renderChargesResults(); return; }
+  const seq = ++chargesSeq;
+  chargesShowAll = false;
+  const params = new URLSearchParams({ project: st.project });
+  if (st.from) params.set('from', st.from);
+  if (st.to) params.set('to', st.to);
+  out.replaceChildren(el('p', { class: 'hint' }, 'Loading charges…'));
+  try {
+    const res = await fetch('/api/charges?' + params.toString());
+    const payload = await res.json();
+    if (payload.error) throw new Error(payload.error);
+    if (seq !== chargesSeq) return;   // a newer request superseded this one
+    CHARGES = payload;
+    CHARGES.wanted = wanted;
+  } catch (err) {
+    if (seq !== chargesSeq) return;
+    CHARGES = null;
+    out.replaceChildren(el('p', { class: 'hint' },
+      'Could not load charges: ' + (err.message || err)));
+    return;
+  }
+  renderChargesResults();
+}
+
+function chargeMatches(c, q) {
+  const hay = `${c.date || ''} ${c.category} ${c.type} ${c.person} ${c.trx} ${c.amount}`
+    .toLowerCase();
+  return q.split(/\s+/).every((w) => !w || hay.includes(w));
+}
+
+function renderChargesResults() {
+  const out = $('#charges-results');
+  if (!out || !CHARGES) return;
+  out.replaceChildren();
+  const st = chargesState();
+  const proj = DATA.projects.find((p) => p.id === CHARGES.project);
+
+  // an empty month can mean "nothing charged" or "the export doesn't cover
+  // it" — very different answers when checking that everything is there
+  const win = proj && proj.detailWindow;
+  if (win && ((st.from && st.from < win[0]) || (st.to || DATA.today) > win[1])) {
+    out.append(el('p', { class: 'charges-coverage' },
+      `⚠ The loaded detail export covers ${win[0]} → ${win[1]} for this award. `
+      + 'Months outside that window look empty even if charges exist — '
+      + 'download a wider export under Get fresh data to see them.'));
+  }
+
+  const q = chargesText.trim().toLowerCase();
+  const charges = q ? CHARGES.charges.filter((c) => chargeMatches(c, q)) : CHARGES.charges;
+  if (!charges.length) {
+    out.append(el('p', { class: 'hint' },
+      (CHARGES.count ? 'No charges match the filter'
+        : `No charges found on ${CHARGES.project} in this window`)
+      + (win ? '' : ' — this award has transaction detail, but no dated window info')
+      + '.'));
+    return;
+  }
+
+  const total = charges.reduce((a, c) => a + c.amount, 0);
+  const credits = charges.filter((c) => c.amount < 0);
+  out.append(el('div', { class: 'charges-headline' },
+    el('b', {}, `${charges.length} charge${charges.length === 1 ? '' : 's'}`),
+    ` · net ${fmtCents.format(total)}`,
+    q ? ` · filtered from ${CHARGES.count}` : '',
+    credits.length
+      ? ` · includes ${credits.length} credit${credits.length === 1 ? '' : 's'} `
+        + `(${fmtCents.format(credits.reduce((a, c) => a + c.amount, 0))})`
+      : '',
+    CHARGES.undated
+      ? ` · ${CHARGES.undated} line${CHARGES.undated === 1 ? '' : 's'} with no date (always shown)`
+      : ''));
+
+  // ---- month-by-type grid: rows are category → type (per person for
+  // payroll), columns are every month of the window — gaps stay visible ----
+  const dated = charges.filter((c) => c.date);
+  const present = [...new Set(dated.map((c) => c.date.slice(0, 7)))].sort();
+  let cols = [];
+  if (present.length) {
+    let a = present[0], b = present[present.length - 1];
+    if (st.from && st.from.slice(0, 7) < a) a = st.from.slice(0, 7);
+    const wantTo = (st.to || DATA.today).slice(0, 7);
+    if (wantTo > b) b = wantTo;
+    cols = monthRange(a, b);
+  }
+  const hasUndated = charges.some((c) => !c.date);
+  if (hasUndated) cols = cols.concat(['undated']);
+
+  const rows = new Map();  // category \0 type \0 person -> row
+  for (const c of charges) {
+    const key = `${c.category} ${c.type} ${c.person}`;
+    let r = rows.get(key);
+    if (!r) {
+      r = { category: c.category, type: c.type, person: c.person, byMonth: {}, total: 0 };
+      rows.set(key, r);
+    }
+    const m = c.date ? c.date.slice(0, 7) : 'undated';
+    r.byMonth[m] = (r.byMonth[m] || 0) + c.amount;
+    r.total += c.amount;
+  }
+  const rowList = [...rows.values()].sort((a, b) =>
+    a.category.localeCompare(b.category) || a.type.localeCompare(b.type)
+    || a.person.localeCompare(b.person));
+
+  const moLabel = (m) => (m === 'undated' ? 'no date'
+    : MONTH_NAMES[+m.slice(5, 7) - 1] + ' ’' + m.slice(2, 4));
+  const cell = (v) => (v === undefined
+    ? el('td', { class: 'cell-empty' }, '—')
+    : el('td', { class: v < -0.005 ? 'neg' : '' }, fmt$(v)));
+
+  if (cols.length && rowList.length) {
+    const grid = el('table', { class: 'cats charges-grid' });
+    grid.append(el('tr', {},
+      el('th', {}, 'Charge'),
+      cols.map((m) => el('th', { title: m === 'undated' ? '' : fmtMonth(m) }, moLabel(m))),
+      el('th', {}, 'Total')));
+    let lastCat = null;
+    for (const r of rowList) {
+      if (r.category !== lastCat) {
+        lastCat = r.category;
+        grid.append(el('tr', { class: 'cat-row' },
+          el('td', { colspan: cols.length + 2 }, r.category || '(no category)')));
+      }
+      grid.append(el('tr', {},
+        el('td', { class: 'charge-label', title: r.type + (r.person ? ' — ' + r.person : '') },
+          r.type || '(no type)', r.person ? el('span', { class: 'muted-cell' }, ' — ' + r.person) : ''),
+        cols.map((m) => cell(r.byMonth[m])),
+        el('td', { class: r.total < -0.005 ? 'neg' : '' }, fmt$(r.total))));
+    }
+    grid.append(el('tr', { class: 'total-row' },
+      el('td', {}, 'Total'),
+      cols.map((m) => {
+        const v = rowList.reduce((a, r) => a + (r.byMonth[m] || 0), 0);
+        return el('td', { class: v < -0.005 ? 'neg' : '' },
+          rowList.some((r) => r.byMonth[m] !== undefined) ? fmt$(v) : '');
+      }),
+      el('td', {}, fmt$(total))));
+    out.append(el('div', { class: 'spark-title', style: 'margin-top:10px' },
+      'What landed each month — a blank cell means nothing posted'));
+    out.append(el('div', { class: 'charges-wrap' }, grid));
+  }
+
+  // ---- every line, newest first ----
+  const CAP = 200;
+  const shown = chargesShowAll ? charges : charges.slice(0, CAP);
+  const tbl = el('table', { class: 'cats charges-lines' },
+    el('tr', {},
+      el('th', {}, 'Date'), el('th', {}, 'Category'), el('th', {}, 'Type'),
+      el('th', {}, 'Person'), el('th', {}, 'Trx #'), el('th', {}, 'Amount')));
+  for (const c of shown) {
+    tbl.append(el('tr', {},
+      el('td', {}, c.date || el('span', { class: 'muted-cell' }, 'no date')),
+      el('td', {}, c.category),
+      el('td', {}, c.type),
+      el('td', {}, c.person),
+      el('td', { class: 'muted-cell' }, c.trx),
+      el('td', { class: c.amount < -0.005 ? 'neg' : '' }, fmtCents.format(c.amount))));
+  }
+  out.append(el('div', { class: 'spark-title', style: 'margin-top:14px' }, 'Every charge line'));
+  out.append(el('div', { class: 'charges-wrap' }, tbl));
+  if (charges.length > shown.length) {
+    out.append(el('button', {
+      class: 'btn', style: 'margin-top:8px',
+      onclick: () => { chargesShowAll = true; renderChargesResults(); },
+    }, `Show all ${charges.length} lines`));
+  }
 }
 
 /* ----- get fresh data ----- */
