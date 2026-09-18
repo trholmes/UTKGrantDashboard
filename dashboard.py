@@ -156,6 +156,33 @@ def parse_pi_dashboard(path):
     return rows
 
 
+def _cols_with(headers, prefix, words):
+    """Header columns on one side (L_/NL_) whose name contains any of words."""
+    return [h for h in headers or []
+            if (h or "").upper().startswith(prefix)
+            and any(w in h.upper() for w in words)]
+
+
+def _desc_columns(headers, prefix):
+    """Columns on one side (L_/NL_) that can hold a line description — an
+    expense report title, a PO text, a payroll comment. Report layouts get
+    renamed, so match on shape instead of hard-coding one column name (the
+    live RPT07 layout calls it NL_EXP_CMNT); when several exist, a TITLE
+    outranks a DESC outranks a COMMENT/CMNT."""
+    rank = {"TITLE": 0, "DESC": 1, "COMMENT": 2, "CMNT": 2}
+    hits = _cols_with(headers, prefix, rank)
+    hits.sort(key=lambda h: min(v for w, v in rank.items() if w in h.upper()))
+    return hits
+
+
+def _first_desc(row, cols):
+    for c in cols:
+        v = (row.get(c) or "").strip()
+        if v:
+            return v
+    return ""
+
+
 def parse_detail(path, labor, nonlabor, meta):
     """Parse an RPT_GMS_007 'Sponsored Project Detail Report' export.
 
@@ -165,7 +192,11 @@ def parse_detail(path, labor, nonlabor, meta):
     passed-in dicts so several export files merge cleanly.
     """
     with open(path, encoding="utf-8-sig", newline="") as f:
-        for r in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        l_desc_cols = _desc_columns(reader.fieldnames, "L_")
+        nl_desc_cols = _desc_columns(reader.fieldnames, "NL_")
+        nl_vend_cols = _cols_with(reader.fieldnames, "NL_", ("VEND",))
+        for r in reader:
             proj = (r.get("PROJ_NUMBER") or "").strip()
             if not proj:
                 continue
@@ -191,11 +222,12 @@ def parse_detail(path, labor, nonlabor, meta):
             l_trx = (r.get("L_TRX_NUM") or "").strip()
             l_amt = fnum(r.get("L_EXP_COST"))
             if l_trx or l_amt is not None:
+                l_desc = _first_desc(r, l_desc_cols)
                 key = (proj, l_trx, (r.get("L_LAB_TRX") or "").strip(),
                        (r.get("L_PER_NUM") or "").strip(),
                        (r.get("L_EXP_DATE") or "").strip(),
                        (r.get("L_EXP_TYPE") or "").strip(),
-                       r.get("L_EXP_COST"))
+                       r.get("L_EXP_COST"), l_desc)
                 if key not in labor:
                     labor[key] = {
                         "project": proj,
@@ -205,6 +237,8 @@ def parse_detail(path, labor, nonlabor, meta):
                         "type": (r.get("L_EXP_TYPE") or "").strip(),
                         "date": fdate(r.get("L_EXP_DATE")),
                         "person": (r.get("L_PER_NAME") or "").strip(),
+                        "desc": l_desc,
+                        "vendor": "",
                         "amount": l_amt or 0.0,
                     }
 
@@ -212,11 +246,13 @@ def parse_detail(path, labor, nonlabor, meta):
             nl_trx = (r.get("NL_TRX_NUM") or "").strip()
             nl_amt = fnum(r.get("NL_EXP_COST"))
             if nl_trx or nl_amt is not None:
+                nl_desc = _first_desc(r, nl_desc_cols)
+                nl_vend = _first_desc(r, nl_vend_cols)
                 key = (proj, nl_trx,
                        (r.get("NL_EXP_DATE") or "").strip(),
                        (r.get("NL_EXP_TYPE") or "").strip(),
                        (r.get("NL_PER_NAME") or "").strip(),
-                       r.get("NL_EXP_COST"))
+                       r.get("NL_EXP_COST"), nl_desc, nl_vend)
                 if key not in nonlabor:
                     nonlabor[key] = {
                         "project": proj,
@@ -226,6 +262,8 @@ def parse_detail(path, labor, nonlabor, meta):
                         "type": (r.get("NL_EXP_TYPE") or "").strip(),
                         "date": fdate(r.get("NL_EXP_DATE")),
                         "person": (r.get("NL_PER_NAME") or "").strip(),
+                        "desc": nl_desc,
+                        "vendor": nl_vend,
                         "amount": nl_amt or 0.0,
                     }
 
@@ -361,7 +399,7 @@ def compute_flags(projects, today_iso):
             if budgeted > 0 and charged > 1.5 * budgeted:
                 suppress.add(fr["category"])
                 flags.append({
-                    "severity": "critical", "project": p["id"],
+                    "severity": "critical", "project": p["id"], "kind": "fringe_rate",
                     "title": f"{label}: fringe charging far above the budgeted rate",
                     "detail": (f"Fringe is running at {charged*100:.0f}% of salaries vs "
                                f"{budgeted*100:.0f}% budgeted (${fr['spent']-fr['budget']:,.0f} "
@@ -383,13 +421,13 @@ def compute_flags(projects, today_iso):
                 sev, flex = "serious", ""
             if c["budget"] <= 0:
                 flags.append({
-                    "severity": sev, "project": p["id"],
+                    "severity": sev, "project": p["id"], "kind": "no_budget",
                     "title": f"{label}: {c['category']} charged with no budget",
                     "detail": f"${c['spent']:,.0f} spent against a $0 budget line.{flex}",
                 })
             else:
                 flags.append({
-                    "severity": sev, "project": p["id"],
+                    "severity": sev, "project": p["id"], "kind": "overspent",
                     "title": f"{label}: {c['category']} overspent by ${over:,.0f}",
                     "detail": (f"${c['spent']:,.0f} spent of a ${c['budget']:,.0f} budget "
                                f"({c['spent']/c['budget']*100:.0f}%).{flex}"),
@@ -403,7 +441,7 @@ def compute_flags(projects, today_iso):
         days_left = (end - today).days
         if days_left < 0:
             flags.append({
-                "severity": "warning", "project": p["id"],
+                "severity": "warning", "project": p["id"], "kind": "past_end",
                 "title": f"{label}: past its end date but still active",
                 "detail": f"Ended {p['end']} with ${tot['remaining']:,.0f} remaining.",
             })
@@ -416,7 +454,7 @@ def compute_flags(projects, today_iso):
             cats = ", ".join(f"{c['category']} ${c['remaining']:,.0f}" for c in biggest)
             sev = "serious" if days_left <= 90 else "warning"
             flags.append({
-                "severity": sev, "project": p["id"],
+                "severity": sev, "project": p["id"], "kind": "ending_soon",
                 "title": f"{label}: ends in {days_left} days with ${tot['remaining']:,.0f} unspent",
                 "detail": f"Largest unspent: {cats}.",
             })
@@ -431,14 +469,14 @@ def compute_flags(projects, today_iso):
                 overrun = projected_total - tot["budget"]
                 if s_frac / t_frac > 1.08 and overrun > 2000:
                     flags.append({
-                        "severity": "serious", "project": p["id"],
+                        "severity": "serious", "project": p["id"], "kind": "overrun_pace",
                         "title": f"{label}: on pace to overrun by ~${overrun:,.0f}",
                         "detail": (f"{s_frac*100:.0f}% of budget spent with {t_frac*100:.0f}% "
                                    f"of the award period elapsed."),
                     })
                 elif t_frac - s_frac > 0.30 and tot["remaining"] > 5000 and days_left > 180:
                     flags.append({
-                        "severity": "info", "project": p["id"],
+                        "severity": "info", "project": p["id"], "kind": "behind_pace",
                         "title": f"{label}: spending well behind schedule",
                         "detail": (f"{s_frac*100:.0f}% spent vs {t_frac*100:.0f}% of period "
                                    f"elapsed — ${tot['remaining']:,.0f} still available."),
@@ -818,14 +856,16 @@ def import_from_inbox(names, inbox_dir, data_dir):
 def charges_response(query, data_dir):
     """Filtered transaction list for /api/charges (the charge lookup section).
 
-    ?project=SPN107048&from=2026-06-01&to=2026-09-18 — one project, inclusive
-    date bounds (both optional). Charges the export left undated are always
+    ?project=SPN107048&project=SPN107049&from=2026-06-01&to=2026-09-18 —
+    one or more projects (repeated, or space/comma separated), inclusive date
+    bounds (both optional). Each charge carries its project so a combined
+    lookup stays attributable. Charges the export left undated are always
     included and counted separately, so nothing disappears silently.
     """
     codes = spn_reports.normalize_projects(query.get("project", []))
-    if len(codes) != 1:
-        raise ValueError("pass exactly one project, e.g. ?project=SPN107048")
-    project = codes[0]
+    if not codes:
+        raise ValueError("pass at least one project, e.g. ?project=SPN107048")
+    wanted = set(codes)
     from_iso = to_iso = None
     if _one(query, "from"):
         from_iso = spn_reports.parse_date(_one(query, "from")).isoformat()
@@ -836,19 +876,20 @@ def charges_response(query, data_dir):
 
     charges, undated, total = [], 0, 0.0
     for t in load_transactions(data_dir):
-        if t["project"] != project:
+        if t["project"] not in wanted:
             continue
         if t["date"] is None:
             undated += 1
         elif (from_iso and t["date"] < from_iso) or (to_iso and t["date"] > to_iso):
             continue
         charges.append({k: t[k] for k in
-                        ("date", "kind", "trx", "category", "type", "person", "amount")})
+                        ("project", "date", "kind", "trx", "category", "type",
+                         "person", "desc", "vendor", "amount")})
         total += t["amount"]
     # newest first; undated lines sink to the bottom
     charges.sort(key=lambda c: (c["date"] is not None, c["date"] or ""), reverse=True)
     return {
-        "project": project,
+        "projects": codes,
         "from": from_iso,
         "to": to_iso,
         "count": len(charges),

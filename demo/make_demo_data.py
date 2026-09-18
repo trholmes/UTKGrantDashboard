@@ -67,21 +67,35 @@ PAYROLL = [
      "Professional Other Academic Salaries", MONTHS),
 ]
 
-NONLABOR = [  # (project, month, type, category, person, amount)
-    ("SPN900001", "2025-01", "Student Fees", "Other Direct Costs", "Riley Park", 3400),
-    ("SPN900001", "2025-08", "Student Fees", "Other Direct Costs", "Riley Park", 3400),
-    ("SPN900001", "2026-01", "Student Fees", "Other Direct Costs", "Riley Park", 3400),
-    ("SPN900002", "2025-03", "Domestic Travel", "Travel", "", 800),
-    ("SPN900002", "2025-10", "Domestic Travel", "Travel", "", 1200),
-    ("SPN900002", "2026-04", "Domestic Travel", "Travel", "", 950),
-    ("SPN900003", "2025-02", "Domestic Travel", "Travel", "", 1250),
-    ("SPN900003", "2025-04", "Foreign Travel", "Travel", "", 2100),
-    ("SPN900003", "2025-06", "Domestic Travel", "Travel", "", 900),
-    ("SPN900003", "2025-09", "Foreign Travel", "Travel", "", 2400),
-    ("SPN900003", "2025-11", "Domestic Travel", "Travel", "", 1050),
-    ("SPN900003", "2026-02", "Domestic Travel", "Travel", "", 1300),
-    ("SPN900003", "2026-05", "Domestic Travel", "Travel", "", 1150),
-    ("SPN900003", "2026-06", "Domestic Travel", "Travel", "", 1050),
+NONLABOR = [  # (project, month, type, category, person, amount, description, vendor)
+    ("SPN900001", "2025-01", "Student Fees", "Other Direct Costs", "Riley Park", 3400,
+     "Spring 2025 fees", "UT Bursar"),
+    ("SPN900001", "2025-08", "Student Fees", "Other Direct Costs", "Riley Park", 3400,
+     "Fall 2025 fees", "UT Bursar"),
+    ("SPN900001", "2026-01", "Student Fees", "Other Direct Costs", "Riley Park", 3400,
+     "Spring 2026 fees", "UT Bursar"),
+    ("SPN900002", "2025-03", "Domestic Travel", "Travel", "", 800,
+     "ER0031482 APS Global Physics Summit, Anaheim", "World Travel Service"),
+    ("SPN900002", "2025-10", "Domestic Travel", "Travel", "", 1200,
+     "ER0033970 DPF meeting, Chicago", "World Travel Service"),
+    ("SPN900002", "2026-04", "Domestic Travel", "Travel", "", 950,
+     "ER0036615 Collaboration meeting, Brookhaven", "Example, Alex"),
+    ("SPN900003", "2025-02", "Domestic Travel", "Travel", "", 1250,
+     "ER0031120 Detector workshop, SLAC", "Example, Alex"),
+    ("SPN900003", "2025-04", "Foreign Travel", "Travel", "", 2100,
+     "ER0031991 CERN test beam", "World Travel Service"),
+    ("SPN900003", "2025-06", "Domestic Travel", "Travel", "", 900,
+     "ER0032554 Snowmass follow-up, Seattle", "Example, Alex"),
+    ("SPN900003", "2025-09", "Foreign Travel", "Travel", "", 2400,
+     "ER0033761 CERN collaboration week", "World Travel Service"),
+    ("SPN900003", "2025-11", "Domestic Travel", "Travel", "", 1050,
+     "ER0034312 Instrumentation conference, Fermilab", "Example, Alex"),
+    ("SPN900003", "2026-02", "Domestic Travel", "Travel", "", 1300,
+     "ER0035500 Detector workshop, Argonne", "World Travel Service"),
+    ("SPN900003", "2026-05", "Domestic Travel", "Travel", "", 1150,
+     "ER0036901 Users meeting, Fermilab", "Example, Alex"),
+    ("SPN900003", "2026-06", "Domestic Travel", "Travel", "", 1050,
+     "ER0037233 Summer program review, DC", "World Travel Service"),
 ]
 
 
@@ -100,9 +114,9 @@ def build_transactions():
         fa = PROJECTS[proj]["fa"]
         if fa:
             nonlabor.append((proj, m, "Indirect Cost", "Indirect Costs",
-                             "", round(base * fa, 2)))
-    for proj, m, ty, cat, person, amt in NONLABOR:
-        nonlabor.append((proj, m, ty, cat, person, float(amt)))
+                             "", round(base * fa, 2), "", ""))
+    for proj, m, ty, cat, person, amt, desc, vend in NONLABOR:
+        nonlabor.append((proj, m, ty, cat, person, float(amt), desc, vend))
     return labor, nonlabor
 
 
@@ -113,7 +127,7 @@ def write_detail(labor, nonlabor):
             "L_TRX_NUM", "L_LAB_TRX", "L_PER_NUM", "L_PER_NAME",
             "L_EXP_DATE", "L_EXP_TYPE", "L_EXP_CAT", "L_EXP_COST",
             "NL_TRX_NUM", "NL_PER_NAME", "NL_EXP_DATE", "NL_EXP_TYPE",
-            "NL_EXP_CAT", "NL_EXP_COST"]
+            "NL_EXP_CAT", "NL_EXP_COST", "NL_EXP_CMNT", "NL_VEND_NAME"]
     with open(OUT / "RPT_DEMO - Expenditure Detail Report.csv", "w",
               newline="") as f:
         w = csv.writer(f)
@@ -130,11 +144,12 @@ def write_detail(labor, nonlabor):
             trx += 1
             w.writerow(meta(proj) + [trx, f"C{trx}R1", num, person,
                                      f"{m}-28", ty, cat, amt,
-                                     "", "", "", "", "", ""])
-        for proj, m, ty, cat, person, amt in nonlabor:
+                                     "", "", "", "", "", "", "", ""])
+        for proj, m, ty, cat, person, amt, desc, vend in nonlabor:
             trx += 1
             w.writerow(meta(proj) + ["", "", "", "", "", "", "", "",
-                                     trx, person, f"{m}-15", ty, cat, amt])
+                                     trx, person, f"{m}-15", ty, cat, amt,
+                                     desc, vend])
 
 
 def write_pi_dashboard(labor, nonlabor):
@@ -143,7 +158,7 @@ def write_pi_dashboard(labor, nonlabor):
     spent = {}
     for proj, m, ty, cat, person, num, amt in labor:
         spent[(proj, cat)] = spent.get((proj, cat), 0.0) + amt
-    for proj, m, ty, cat, person, amt in nonlabor:
+    for proj, m, ty, cat, person, amt, desc, vend in nonlabor:
         spent[(proj, cat)] = spent.get((proj, cat), 0.0) + amt
     for proj, p in PROJECTS.items():
         for cat, amt in p["prior"].items():

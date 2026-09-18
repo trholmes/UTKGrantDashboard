@@ -184,9 +184,13 @@ function renderFlags() {
   const box = $('#flags');
   box.replaceChildren();
   const showNotes = $('#show-notes').checked;
-  const shown = DATA.flags.filter((f) => showNotes || f.severity !== 'info');
-  const hidden = DATA.flags.length - shown.length;
-  if (!DATA.flags.length) {
+  // "past its end date but still active" is exactly what a kept-active late
+  // renewal looks like — no point flagging what the user already marked
+  const flags = DATA.flags.filter((f) =>
+    !(f.kind === 'past_end' && (CFG.overrides[f.project] || {}).forceActive));
+  const shown = flags.filter((f) => showNotes || f.severity !== 'info');
+  const hidden = flags.length - shown.length;
+  if (!flags.length) {
     box.append(el('div', { class: 'flag-empty' }, 'No issues flagged. \u{1F389}'));
     return;
   }
@@ -206,11 +210,11 @@ function renderFlags() {
 /* ----- portfolio summary ----- */
 
 function grantFilter() {
-  // the award selection scoping the summary, cards, and people graying
-  const curMonth = DATA.today.slice(0, 7);
+  // the award selection scoping the summary, cards, and people graying;
+  // isActive honours the per-award "treat as active" override, and
+  // effectiveEnd supplies the month its money lasts through
   const all = DATA.projects.filter((p) =>
-    p.inDashboard && p.status.toLowerCase() === 'active'
-    && p.end && p.end.slice(0, 7) >= curMonth);
+    p.inDashboard && isActive(p) && effectiveEnd(p));
   const excluded = new Set((CFG.ui && CFG.ui.excluded) || []);
   const selected = all.filter((p) => !excluded.has(p.id));
   return {
@@ -225,7 +229,11 @@ function renderSummary() {
   box.replaceChildren();
   const curMonth = DATA.today.slice(0, 7);
   const filter = grantFilter();
-  if (!filter.all.length) return;
+  const missingNote = missingAwardsNote(filter);
+  if (!filter.all.length) {
+    if (missingNote) box.append(missingNote);
+    return;
+  }
 
   // checkbox chips: which awards feed this summary (and show as cards)
   box.append(el('div', { class: 'grant-filter' },
@@ -239,6 +247,7 @@ function renderSummary() {
           save(); renderAll();
         },
       }), ` ${p.shortName}`))));
+  if (missingNote) box.append(missingNote);
 
   const active = filter.selected;
   const selectedSet = filter.selectedSet;
@@ -398,8 +407,7 @@ function renderSummary() {
       const ov = CFG.overrides[p.id] || {};
       const extra = ov.expectedExtra || 0;
       extraTotal += extra;
-      let end = p.end.slice(0, 7);
-      if (ov.expectedEnd && ov.expectedEnd > end) end = ov.expectedEnd;
+      const end = effectiveEnd(p);
       const partial = (p.monthly || {})[curMonth] || 0;
       return { end, bal: Math.max(0, p.totals.remaining - p.totals.committed + partial) + extra };
     })
@@ -620,9 +628,48 @@ function renderSummary() {
   }
   card.append(legend);
   card.append(el('div', { class: 'burn-line' }, 'Awards end: ',
-    active.slice().sort((a, b) => (a.end < b.end ? -1 : 1))
-      .map((p) => `${p.shortName} ${fmtMonth(p.end.slice(0, 7))}`).join(' · ')));
+    active.slice().sort((a, b) => (effectiveEnd(a) < effectiveEnd(b) ? -1 : 1))
+      .map((p) => `${p.shortName} ${fmtMonth(effectiveEnd(p))}`
+        + (effectiveEnd(p) !== (p.end || '').slice(0, 7) ? ' (expected)' : ''))
+      .join(' · ')));
   box.append(card);
+}
+
+function missingAwardsNote(filter) {
+  // why an award someone can see elsewhere (the charge lookup, the export)
+  // is absent from the summary — with the one-click fix where there is one
+  const shown = new Set(filter.all.map((p) => p.id));
+  const missing = DATA.projects.filter((p) => !shown.has(p.id));
+  if (!missing.length) return null;
+  const curMonth = DATA.today.slice(0, 7);
+  const items = missing.map((p) => {
+    const row = el('div', { class: 'missing-row' },
+      el('b', {}, p.id),
+      p.shortName && p.shortName !== p.id ? ` ${p.shortName}` : '', ' — ');
+    if (!p.inDashboard) {
+      row.append('only in the transaction detail export; without budget rows '
+        + 'there are no balances to project. Re-export the PI Dashboard with '
+        + 'this project included.');
+    } else {
+      const why = p.status.toLowerCase() !== 'active'
+        ? `the export marks it “${p.status}”${p.end ? ` (ended ${p.end})` : ''}`
+        : (p.end && p.end.slice(0, 7) < curMonth)
+          ? `its end date (${p.end}) has passed`
+          : 'the export gives it no end date';
+      row.append(why + '. ', el('button', {
+        class: 'btn btn-x',
+        title: 'Include this award everywhere as if it were active — for late '
+          + 'year-by-year renewals. The projection extends a year past the '
+          + 'recorded end; adjust that with “new end” on its card.',
+        onclick: () => setForceActive(p, true),
+      }, 'Treat as active'));
+    }
+    return row;
+  });
+  return el('details', { class: 'missing-awards' },
+    el('summary', {}, `${missing.length} award${missing.length === 1 ? '' : 's'}`
+      + ' not in this summary — why?'),
+    items);
 }
 
 /* ----- portfolio ----- */
@@ -649,8 +696,7 @@ function renderPortfolio() {
   const showClosed = $('#show-closed').checked;
   const hidden = new Set((CFG.ui && CFG.ui.excluded) || []);
   const projects = DATA.projects.filter(
-    (p) => p.inDashboard && !hidden.has(p.id)
-      && (showClosed || p.status.toLowerCase() === 'active'));
+    (p) => p.inDashboard && !hidden.has(p.id) && (showClosed || isActive(p)));
 
   // shared axes for all sparklines: same month range and same $ scale,
   // so the little plots are comparable across awards
@@ -675,12 +721,20 @@ function renderPortfolio() {
   for (const p of projects) {
     const tf = timeFrac(p);
     const sf = p.totals.budget > 0 ? p.totals.spent / p.totals.budget : null;
-    const active = p.status.toLowerCase() === 'active';
+    const active = isActive(p);
+    const forced = !!(CFG.overrides[p.id] || {}).forceActive;
 
     const card = el('div', { class: 'card' });
     card.append(el('div', { class: 'card-head' },
       el('h3', {}, p.shortName),
-      el('span', { class: 'status-chip' + (active ? '' : ' closed') }, p.status)));
+      forced
+        ? el('span', {
+            class: 'status-chip kept',
+            title: `The export says “${p.status}”`
+              + (p.end && p.end < DATA.today ? `, ended ${p.end}` : '')
+              + ' — kept active by you (untick "Treat as active" below to undo)',
+          }, 'Kept active')
+        : el('span', { class: 'status-chip' + (active ? '' : ' closed') }, p.status)));
     // full-width so it can run under the status chip without wrapping
     card.append(el('div', { class: 'proj-id' },
       `${p.id} · ${p.start ?? '?'} → ${p.end ?? '?'}`,
@@ -738,8 +792,7 @@ function renderPortfolio() {
     // the new end and adds the funds, mirroring the summary's treatment
     const ov = CFG.overrides[p.id] || (CFG.overrides[p.id] = {});
     const extra = active ? (ov.expectedExtra || 0) : 0;
-    let effEnd = endMonth;
-    if (active && endMonth && ov.expectedEnd && ov.expectedEnd > endMonth) effEnd = ov.expectedEnd;
+    const effEnd = active ? effectiveEnd(p) : endMonth;
     const canProject = active && effEnd && effEnd > curMonth && cardModel;
     if ((hasMonthly && sparkDomain.length) || canProject) {
       // when projecting, the current (partial) month is modeled rather than
@@ -833,7 +886,9 @@ function renderPortfolio() {
         : p.burn.recent != null ? `avg of ${p.burn.recentMonths.map(fmtMonth).join(', ')}`
         : 'linear average over the award';
       const runway = p.totals.remaining / burn;
-      const monthsLeft = p.end ? monthDiff(curMonth, p.end.slice(0, 7)) : null;
+      // months left to the effective end — the recorded end, an expected
+      // extension, or "kept active" — matching what the projection uses
+      const monthsLeft = effEnd ? monthDiff(curMonth, effEnd) : null;
       let runTxt = `runway ≈ ${runway.toFixed(0)} mo`;
       if (monthsLeft !== null) runTxt += ` (award has ${monthsLeft} mo left)`;
       const extra = (p.burn.avg12 != null && p.burn.recent != null)
@@ -872,6 +927,23 @@ function renderPortfolio() {
       card.append(el('div', { class: 'spark-block' },
         el('div', { class: 'spark-title' }, "Who's on this grant"),
         el('div', { class: 'burn-line' }, 'No salaries charged in the export window.')));
+    }
+
+    // late year-by-year renewals: the export can say "closed" (or carry a
+    // past end date) while the next increment is simply late — one tick
+    // keeps the award in the summary, projections, and defaults
+    const looksClosed = p.status.toLowerCase() !== 'active'
+      || (p.end && p.end.slice(0, 7) < curMonth);
+    if (looksClosed) {
+      card.append(el('label', { class: 'check keep-active' },
+        el('input', {
+          type: 'checkbox', checked: forced || null,
+          onchange: (e) => setForceActive(p, e.target.checked),
+        }),
+        ' Treat as active — the export '
+        + (p.status.toLowerCase() !== 'active'
+          ? `marks this “${p.status}”` : `says it ended ${p.end}`)
+        + ', but a late renewal looks exactly like this.'));
     }
 
     // manually entered future funding (persists in config.json; feeds the
@@ -1246,9 +1318,17 @@ function chargesState() {
   ui.charges = ui.charges && typeof ui.charges === 'object' ? ui.charges : {};
   const st = ui.charges;
   const withDetail = DATA.projects.filter((p) => p.hasDetail);
-  if (!withDetail.some((p) => p.id === st.project)) {
+  // migrate the single-award field this state used to hold
+  if (!Array.isArray(st.projects) && typeof st.project === 'string' && st.project) {
+    st.projects = [st.project];
+  }
+  delete st.project;
+  if (Array.isArray(st.projects)) {
+    st.projects = st.projects.filter((id) => withDetail.some((p) => p.id === id));
+  } else {
+    // first visit: start with one active award; an emptied selection stays empty
     const first = withDetail.find(isActive) || withDetail[0];
-    st.project = first ? first.id : '';
+    st.projects = first ? [first.id] : [];
   }
   // "the last few months" is the common question, so that's the default
   if (typeof st.from !== 'string' || !st.from) {
@@ -1270,13 +1350,25 @@ function renderCharges() {
   }
   const st = chargesState();
   const card = el('div', { class: 'charges-card' });
-  card.append(el('div', { class: 'getdata-row', style: 'margin-top:0' },
-    el('label', { class: 'check' }, 'Award ',
-      el('select', {
-        onchange: (e) => { st.project = e.target.value; save(); refreshCharges(); },
-      }, withDetail.map((p) => el('option', {
-        value: p.id, selected: p.id === st.project || null,
-      }, `${p.id} — ${p.shortName}`)))),
+  const chips = el('div', { class: 'chips', style: 'margin-top:0' });
+  for (const p of withDetail) {
+    const on = st.projects.includes(p.id);
+    chips.append(el('label', { class: 'chip' + (on ? ' on' : ''), title: p.name },
+      el('input', {
+        type: 'checkbox', checked: on || null,
+        onchange: (e) => {
+          st.projects = e.target.checked
+            ? st.projects.concat([p.id])
+            : st.projects.filter((id) => id !== p.id);
+          save(); renderCharges();
+        },
+      }),
+      p.id,
+      el('span', { class: 'chip-name' }, p.shortName || ''),
+      isActive(p) ? null : el('span', { class: 'chip-closed' }, 'closed')));
+  }
+  card.append(chips);
+  card.append(el('div', { class: 'getdata-row' },
     el('label', { class: 'check' }, 'from ',
       el('input', {
         type: 'date', value: st.from,
@@ -1303,13 +1395,17 @@ async function refreshCharges() {
   const out = $('#charges-results');
   if (!out) return;
   const st = chargesState();
-  if (!st.project) return;
-  // same award, window, and underlying data as last time: just re-render
-  const wanted = JSON.stringify([st.project, st.from, st.to, DATA.generated]);
+  if (!st.projects.length) {
+    CHARGES = null;
+    out.replaceChildren(el('p', { class: 'hint' }, 'Pick at least one award.'));
+    return;
+  }
+  // same awards, window, and underlying data as last time: just re-render
+  const wanted = JSON.stringify([st.projects, st.from, st.to, DATA.generated]);
   if (CHARGES && CHARGES.wanted === wanted) { renderChargesResults(); return; }
   const seq = ++chargesSeq;
   chargesShowAll = false;
-  const params = new URLSearchParams({ project: st.project });
+  const params = new URLSearchParams({ project: st.projects.join(' ') });
   if (st.from) params.set('from', st.from);
   if (st.to) params.set('to', st.to);
   out.replaceChildren(el('p', { class: 'hint' }, 'Loading charges…'));
@@ -1331,9 +1427,9 @@ async function refreshCharges() {
 }
 
 function chargeMatches(c, q) {
-  const hay = `${c.date || ''} ${c.category} ${c.type} ${c.person} ${c.trx} ${c.amount}`
-    .toLowerCase();
-  return q.split(/\s+/).every((w) => !w || hay.includes(w));
+  const hay = `${c.project} ${c.date || ''} ${c.category} ${c.type} ${c.person} `
+    + `${c.trx} ${c.desc || ''} ${c.vendor || ''} ${c.amount}`;
+  return q.split(/\s+/).every((w) => !w || hay.toLowerCase().includes(w));
 }
 
 function renderChargesResults() {
@@ -1341,15 +1437,28 @@ function renderChargesResults() {
   if (!out || !CHARGES) return;
   out.replaceChildren();
   const st = chargesState();
-  const proj = DATA.projects.find((p) => p.id === CHARGES.project);
+  const multi = CHARGES.projects.length > 1;
+  const shortOf = new Map(DATA.projects.map((p) => [p.id, p.shortName]));
 
   // an empty month can mean "nothing charged" or "the export doesn't cover
   // it" — very different answers when checking that everything is there
-  const win = proj && proj.detailWindow;
-  if (win && ((st.from && st.from < win[0]) || (st.to || DATA.today) > win[1])) {
+  const uncovered = CHARGES.projects
+    .map((id) => DATA.projects.find((p) => p.id === id))
+    .filter((p) => p && p.detailWindow
+      && ((st.from && st.from < p.detailWindow[0])
+          || (st.to || DATA.today) > p.detailWindow[1]));
+  if (uncovered.length) {
+    // group awards sharing the same export window into one clause
+    const byWin = new Map();
+    for (const p of uncovered) {
+      const w = `${p.detailWindow[0]} → ${p.detailWindow[1]}`;
+      byWin.set(w, (byWin.get(w) || []).concat([p.id]));
+    }
     out.append(el('p', { class: 'charges-coverage' },
-      `⚠ The loaded detail export covers ${win[0]} → ${win[1]} for this award. `
-      + 'Months outside that window look empty even if charges exist — '
+      '⚠ The loaded detail export covers '
+      + [...byWin.entries()].map(([w, ids]) =>
+        `${w} for ${multi ? ids.join(', ') : 'this award'}`).join('; ')
+      + '. Months outside that window look empty even if charges exist — '
       + 'download a wider export under Get fresh data to see them.'));
   }
 
@@ -1358,8 +1467,7 @@ function renderChargesResults() {
   if (!charges.length) {
     out.append(el('p', { class: 'hint' },
       (CHARGES.count ? 'No charges match the filter'
-        : `No charges found on ${CHARGES.project} in this window`)
-      + (win ? '' : ' — this award has transaction detail, but no dated window info')
+        : `No charges found on ${CHARGES.projects.join(', ')} in this window`)
       + '.'));
     return;
   }
@@ -1393,12 +1501,14 @@ function renderChargesResults() {
   const hasUndated = charges.some((c) => !c.date);
   if (hasUndated) cols = cols.concat(['undated']);
 
-  const rows = new Map();  // category \0 type \0 person -> row
+  const rows = new Map();  // category \0 type \0 person (\0 project) -> row
   for (const c of charges) {
-    const key = `${c.category} ${c.type} ${c.person}`;
+    const key = `${c.category} ${c.type} ${c.person}`
+      + (multi ? ` ${c.project}` : '');
     let r = rows.get(key);
     if (!r) {
-      r = { category: c.category, type: c.type, person: c.person, byMonth: {}, total: 0 };
+      r = { category: c.category, type: c.type, person: c.person,
+            project: c.project, byMonth: {}, total: 0 };
       rows.set(key, r);
     }
     const m = c.date ? c.date.slice(0, 7) : 'undated';
@@ -1407,7 +1517,7 @@ function renderChargesResults() {
   }
   const rowList = [...rows.values()].sort((a, b) =>
     a.category.localeCompare(b.category) || a.type.localeCompare(b.type)
-    || a.person.localeCompare(b.person));
+    || a.person.localeCompare(b.person) || a.project.localeCompare(b.project));
 
   const moLabel = (m) => (m === 'undated' ? 'no date'
     : MONTH_NAMES[+m.slice(5, 7) - 1] + ' ’' + m.slice(2, 4));
@@ -1428,9 +1538,15 @@ function renderChargesResults() {
         grid.append(el('tr', { class: 'cat-row' },
           el('td', { colspan: cols.length + 2 }, r.category || '(no category)')));
       }
+      const award = multi ? (shortOf.get(r.project) || r.project) : '';
       grid.append(el('tr', {},
-        el('td', { class: 'charge-label', title: r.type + (r.person ? ' — ' + r.person : '') },
-          r.type || '(no type)', r.person ? el('span', { class: 'muted-cell' }, ' — ' + r.person) : ''),
+        el('td', {
+          class: 'charge-label',
+          title: r.type + (r.person ? ' — ' + r.person : '') + (award ? ` (${r.project})` : ''),
+        },
+          r.type || '(no type)',
+          r.person ? el('span', { class: 'muted-cell' }, ' — ' + r.person) : '',
+          award ? el('span', { class: 'muted-cell' }, ' · ' + award) : ''),
         cols.map((m) => cell(r.byMonth[m])),
         el('td', { class: r.total < -0.005 ? 'neg' : '' }, fmt$(r.total))));
     }
@@ -1450,15 +1566,24 @@ function renderChargesResults() {
   // ---- every line, newest first ----
   const CAP = 200;
   const shown = chargesShowAll ? charges : charges.slice(0, CAP);
+  const hasDesc = charges.some((c) => c.desc);
+  const hasVend = charges.some((c) => c.vendor);
   const tbl = el('table', { class: 'cats charges-lines' },
     el('tr', {},
-      el('th', {}, 'Date'), el('th', {}, 'Category'), el('th', {}, 'Type'),
+      el('th', {}, 'Date'),
+      multi ? el('th', {}, 'Award') : null,
+      el('th', {}, 'Category'), el('th', {}, 'Type'),
+      hasDesc ? el('th', {}, 'Description') : null,
+      hasVend ? el('th', {}, 'Vendor') : null,
       el('th', {}, 'Person'), el('th', {}, 'Trx #'), el('th', {}, 'Amount')));
   for (const c of shown) {
     tbl.append(el('tr', {},
       el('td', {}, c.date || el('span', { class: 'muted-cell' }, 'no date')),
+      multi ? el('td', { class: 'muted-cell' }, c.project) : null,
       el('td', {}, c.category),
       el('td', {}, c.type),
+      hasDesc ? el('td', { class: 'desc-cell', title: c.desc || '' }, c.desc || '') : null,
+      hasVend ? el('td', { class: 'desc-cell', title: c.vendor || '' }, c.vendor || '') : null,
       el('td', {}, c.person),
       el('td', { class: 'muted-cell' }, c.trx),
       el('td', { class: c.amount < -0.005 ? 'neg' : '' }, fmtCents.format(c.amount))));
@@ -1501,8 +1626,35 @@ function fetchState() {
 }
 
 function isActive(p) {
+  // the per-award "treat as active" override wins: year-by-year grants often
+  // look closed in the export while the next increment is late
+  if (((CFG && CFG.overrides) || {})[p.id]?.forceActive) return true;
   return p.status.toLowerCase() === 'active'
     && (!p.end || p.end.slice(0, 7) >= DATA.today.slice(0, 7));
+}
+
+function effectiveEnd(p) {
+  // the month an award's money can be spent through: the report's end date,
+  // extended by the "new end" override; an award kept active past its
+  // recorded end lasts at least through the current month
+  const ov = ((CFG && CFG.overrides) || {})[p.id] || {};
+  let end = p.end ? p.end.slice(0, 7) : null;
+  if (ov.expectedEnd && (!end || ov.expectedEnd > end)) end = ov.expectedEnd;
+  if (ov.forceActive && (!end || end < DATA.today.slice(0, 7))) {
+    end = DATA.today.slice(0, 7);
+  }
+  return end;
+}
+
+function setForceActive(p, on) {
+  const ov = CFG.overrides[p.id] || (CFG.overrides[p.id] = {});
+  ov.forceActive = on || null;
+  // a late renewal usually means another year: default the projection end a
+  // year past the recorded end — visible and editable as "new end" on the card
+  if (on && !ov.expectedEnd && p.end && p.end.slice(0, 7) < DATA.today.slice(0, 7)) {
+    ov.expectedEnd = monthAdd(p.end.slice(0, 7), 12);
+  }
+  save(); renderAll();
 }
 
 function defaultFrom() {
