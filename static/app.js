@@ -1246,9 +1246,17 @@ function chargesState() {
   ui.charges = ui.charges && typeof ui.charges === 'object' ? ui.charges : {};
   const st = ui.charges;
   const withDetail = DATA.projects.filter((p) => p.hasDetail);
-  if (!withDetail.some((p) => p.id === st.project)) {
+  // migrate the single-award field this state used to hold
+  if (!Array.isArray(st.projects) && typeof st.project === 'string' && st.project) {
+    st.projects = [st.project];
+  }
+  delete st.project;
+  if (Array.isArray(st.projects)) {
+    st.projects = st.projects.filter((id) => withDetail.some((p) => p.id === id));
+  } else {
+    // first visit: start with one active award; an emptied selection stays empty
     const first = withDetail.find(isActive) || withDetail[0];
-    st.project = first ? first.id : '';
+    st.projects = first ? [first.id] : [];
   }
   // "the last few months" is the common question, so that's the default
   if (typeof st.from !== 'string' || !st.from) {
@@ -1270,13 +1278,25 @@ function renderCharges() {
   }
   const st = chargesState();
   const card = el('div', { class: 'charges-card' });
-  card.append(el('div', { class: 'getdata-row', style: 'margin-top:0' },
-    el('label', { class: 'check' }, 'Award ',
-      el('select', {
-        onchange: (e) => { st.project = e.target.value; save(); refreshCharges(); },
-      }, withDetail.map((p) => el('option', {
-        value: p.id, selected: p.id === st.project || null,
-      }, `${p.id} — ${p.shortName}`)))),
+  const chips = el('div', { class: 'chips', style: 'margin-top:0' });
+  for (const p of withDetail) {
+    const on = st.projects.includes(p.id);
+    chips.append(el('label', { class: 'chip' + (on ? ' on' : ''), title: p.name },
+      el('input', {
+        type: 'checkbox', checked: on || null,
+        onchange: (e) => {
+          st.projects = e.target.checked
+            ? st.projects.concat([p.id])
+            : st.projects.filter((id) => id !== p.id);
+          save(); renderCharges();
+        },
+      }),
+      p.id,
+      el('span', { class: 'chip-name' }, p.shortName || ''),
+      isActive(p) ? null : el('span', { class: 'chip-closed' }, 'closed')));
+  }
+  card.append(chips);
+  card.append(el('div', { class: 'getdata-row' },
     el('label', { class: 'check' }, 'from ',
       el('input', {
         type: 'date', value: st.from,
@@ -1303,13 +1323,17 @@ async function refreshCharges() {
   const out = $('#charges-results');
   if (!out) return;
   const st = chargesState();
-  if (!st.project) return;
-  // same award, window, and underlying data as last time: just re-render
-  const wanted = JSON.stringify([st.project, st.from, st.to, DATA.generated]);
+  if (!st.projects.length) {
+    CHARGES = null;
+    out.replaceChildren(el('p', { class: 'hint' }, 'Pick at least one award.'));
+    return;
+  }
+  // same awards, window, and underlying data as last time: just re-render
+  const wanted = JSON.stringify([st.projects, st.from, st.to, DATA.generated]);
   if (CHARGES && CHARGES.wanted === wanted) { renderChargesResults(); return; }
   const seq = ++chargesSeq;
   chargesShowAll = false;
-  const params = new URLSearchParams({ project: st.project });
+  const params = new URLSearchParams({ project: st.projects.join(' ') });
   if (st.from) params.set('from', st.from);
   if (st.to) params.set('to', st.to);
   out.replaceChildren(el('p', { class: 'hint' }, 'Loading charges…'));
@@ -1331,9 +1355,9 @@ async function refreshCharges() {
 }
 
 function chargeMatches(c, q) {
-  const hay = `${c.date || ''} ${c.category} ${c.type} ${c.person} ${c.trx} ${c.amount}`
-    .toLowerCase();
-  return q.split(/\s+/).every((w) => !w || hay.includes(w));
+  const hay = `${c.project} ${c.date || ''} ${c.category} ${c.type} ${c.person} `
+    + `${c.trx} ${c.desc || ''} ${c.amount}`;
+  return q.split(/\s+/).every((w) => !w || hay.toLowerCase().includes(w));
 }
 
 function renderChargesResults() {
@@ -1341,15 +1365,28 @@ function renderChargesResults() {
   if (!out || !CHARGES) return;
   out.replaceChildren();
   const st = chargesState();
-  const proj = DATA.projects.find((p) => p.id === CHARGES.project);
+  const multi = CHARGES.projects.length > 1;
+  const shortOf = new Map(DATA.projects.map((p) => [p.id, p.shortName]));
 
   // an empty month can mean "nothing charged" or "the export doesn't cover
   // it" — very different answers when checking that everything is there
-  const win = proj && proj.detailWindow;
-  if (win && ((st.from && st.from < win[0]) || (st.to || DATA.today) > win[1])) {
+  const uncovered = CHARGES.projects
+    .map((id) => DATA.projects.find((p) => p.id === id))
+    .filter((p) => p && p.detailWindow
+      && ((st.from && st.from < p.detailWindow[0])
+          || (st.to || DATA.today) > p.detailWindow[1]));
+  if (uncovered.length) {
+    // group awards sharing the same export window into one clause
+    const byWin = new Map();
+    for (const p of uncovered) {
+      const w = `${p.detailWindow[0]} → ${p.detailWindow[1]}`;
+      byWin.set(w, (byWin.get(w) || []).concat([p.id]));
+    }
     out.append(el('p', { class: 'charges-coverage' },
-      `⚠ The loaded detail export covers ${win[0]} → ${win[1]} for this award. `
-      + 'Months outside that window look empty even if charges exist — '
+      '⚠ The loaded detail export covers '
+      + [...byWin.entries()].map(([w, ids]) =>
+        `${w} for ${multi ? ids.join(', ') : 'this award'}`).join('; ')
+      + '. Months outside that window look empty even if charges exist — '
       + 'download a wider export under Get fresh data to see them.'));
   }
 
@@ -1358,8 +1395,7 @@ function renderChargesResults() {
   if (!charges.length) {
     out.append(el('p', { class: 'hint' },
       (CHARGES.count ? 'No charges match the filter'
-        : `No charges found on ${CHARGES.project} in this window`)
-      + (win ? '' : ' — this award has transaction detail, but no dated window info')
+        : `No charges found on ${CHARGES.projects.join(', ')} in this window`)
       + '.'));
     return;
   }
@@ -1393,12 +1429,14 @@ function renderChargesResults() {
   const hasUndated = charges.some((c) => !c.date);
   if (hasUndated) cols = cols.concat(['undated']);
 
-  const rows = new Map();  // category \0 type \0 person -> row
+  const rows = new Map();  // category \0 type \0 person (\0 project) -> row
   for (const c of charges) {
-    const key = `${c.category} ${c.type} ${c.person}`;
+    const key = `${c.category} ${c.type} ${c.person}`
+      + (multi ? ` ${c.project}` : '');
     let r = rows.get(key);
     if (!r) {
-      r = { category: c.category, type: c.type, person: c.person, byMonth: {}, total: 0 };
+      r = { category: c.category, type: c.type, person: c.person,
+            project: c.project, byMonth: {}, total: 0 };
       rows.set(key, r);
     }
     const m = c.date ? c.date.slice(0, 7) : 'undated';
@@ -1407,7 +1445,7 @@ function renderChargesResults() {
   }
   const rowList = [...rows.values()].sort((a, b) =>
     a.category.localeCompare(b.category) || a.type.localeCompare(b.type)
-    || a.person.localeCompare(b.person));
+    || a.person.localeCompare(b.person) || a.project.localeCompare(b.project));
 
   const moLabel = (m) => (m === 'undated' ? 'no date'
     : MONTH_NAMES[+m.slice(5, 7) - 1] + ' ’' + m.slice(2, 4));
@@ -1428,9 +1466,15 @@ function renderChargesResults() {
         grid.append(el('tr', { class: 'cat-row' },
           el('td', { colspan: cols.length + 2 }, r.category || '(no category)')));
       }
+      const award = multi ? (shortOf.get(r.project) || r.project) : '';
       grid.append(el('tr', {},
-        el('td', { class: 'charge-label', title: r.type + (r.person ? ' — ' + r.person : '') },
-          r.type || '(no type)', r.person ? el('span', { class: 'muted-cell' }, ' — ' + r.person) : ''),
+        el('td', {
+          class: 'charge-label',
+          title: r.type + (r.person ? ' — ' + r.person : '') + (award ? ` (${r.project})` : ''),
+        },
+          r.type || '(no type)',
+          r.person ? el('span', { class: 'muted-cell' }, ' — ' + r.person) : '',
+          award ? el('span', { class: 'muted-cell' }, ' · ' + award) : ''),
         cols.map((m) => cell(r.byMonth[m])),
         el('td', { class: r.total < -0.005 ? 'neg' : '' }, fmt$(r.total))));
     }
@@ -1450,15 +1494,21 @@ function renderChargesResults() {
   // ---- every line, newest first ----
   const CAP = 200;
   const shown = chargesShowAll ? charges : charges.slice(0, CAP);
+  const hasDesc = charges.some((c) => c.desc);
   const tbl = el('table', { class: 'cats charges-lines' },
     el('tr', {},
-      el('th', {}, 'Date'), el('th', {}, 'Category'), el('th', {}, 'Type'),
+      el('th', {}, 'Date'),
+      multi ? el('th', {}, 'Award') : null,
+      el('th', {}, 'Category'), el('th', {}, 'Type'),
+      hasDesc ? el('th', {}, 'Description') : null,
       el('th', {}, 'Person'), el('th', {}, 'Trx #'), el('th', {}, 'Amount')));
   for (const c of shown) {
     tbl.append(el('tr', {},
       el('td', {}, c.date || el('span', { class: 'muted-cell' }, 'no date')),
+      multi ? el('td', { class: 'muted-cell' }, c.project) : null,
       el('td', {}, c.category),
       el('td', {}, c.type),
+      hasDesc ? el('td', { class: 'desc-cell', title: c.desc || '' }, c.desc || '') : null,
       el('td', {}, c.person),
       el('td', { class: 'muted-cell' }, c.trx),
       el('td', { class: c.amount < -0.005 ? 'neg' : '' }, fmtCents.format(c.amount))));

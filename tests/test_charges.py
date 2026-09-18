@@ -95,6 +95,14 @@ class ChargesResponse(unittest.TestCase):
         self.assertEqual([c["trx"] for c in payload["charges"]], ["10003"])
         self.assertEqual(payload["total"], 3000.00)
 
+    def test_combines_several_projects_with_each_charge_tagged(self):
+        payload = self.lookup(project="SPN900001 SPN900002",
+                              **{"from": "2026-07-01", "to": "2026-07-31"})
+        self.assertEqual(payload["projects"], ["SPN900001", "SPN900002"])
+        by_trx = {c["trx"]: c["project"] for c in payload["charges"] if c["date"]}
+        self.assertEqual(by_trx, {"10002": "SPN900001", "20001": "SPN900001",
+                                  "10003": "SPN900002"})
+
     def test_window_bounds_are_inclusive(self):
         # from and to fall exactly on the dates of 10001 and 20001
         payload = self.lookup(project="SPN900001",
@@ -126,19 +134,41 @@ class ChargesResponse(unittest.TestCase):
 
     def test_normalizes_the_project_code(self):
         payload = self.lookup(project="900002")
-        self.assertEqual(payload["project"], "SPN900002")
+        self.assertEqual(payload["projects"], ["SPN900002"])
         self.assertEqual(payload["count"], 1)
 
-    def test_requires_exactly_one_project(self):
+    def test_requires_a_project(self):
         with self.assertRaises(ValueError):
             self.lookup(project="")
-        with self.assertRaises(ValueError):
-            self.lookup(project="SPN900001 SPN900002")
 
     def test_rejects_a_backwards_window(self):
         with self.assertRaises(ValueError):
             self.lookup(project="SPN900001",
                         **{"from": "2026-08-01", "to": "2026-07-01"})
+
+    def test_no_description_column_means_empty_descriptions(self):
+        payload = self.lookup(project="SPN900001")
+        self.assertTrue(all(c["desc"] == "" for c in payload["charges"]))
+
+    def test_descriptions_are_picked_up_by_column_shape(self):
+        # the layout's name for the column has changed before, so anything
+        # L_/NL_-prefixed containing TITLE/DESC/COMMENT counts
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "RPT_TEST - Detail.csv"
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(DETAIL_COLS + ["L_EXP_COMMENT", "NL_TRX_DESC", "NL_EXP_TITLE"])
+                w.writerow(labor_row("SPN900001", "10001", "Riley Park", "2026-06-28",
+                                     "GTA GA GRA Salaries", "Salaries & Wages", "2600.00")
+                           + ["June effort adjustment", "", ""])
+                w.writerow(nonlabor_row("SPN900001", "20001", "", "2026-07-15",
+                                        "Domestic Travel", "Travel", "812.34")
+                           + ["", "ER0012345 conference travel", "APS April Meeting"])
+            payload = dashboard.charges_response({"project": ["SPN900001"]}, Path(tmp))
+        desc = {c["trx"]: c["desc"] for c in payload["charges"]}
+        self.assertEqual(desc["10001"], "June effort adjustment")
+        # a TITLE column outranks a DESC column when both are filled
+        self.assertEqual(desc["20001"], "APS April Meeting")
 
     def test_detail_window_reaches_the_front_end(self):
         payload = dashboard.build_payload(self.data)

@@ -257,6 +257,7 @@ table.charges-grid tr.cat-row td {
 table.charges-lines td, table.charges-lines th { text-align: left; }
 table.charges-lines td:last-child, table.charges-lines th:last-child { text-align: right; }
 td.charge-label { max-width: 30ch; overflow: hidden; text-overflow: ellipsis; }
+table.charges-lines td.desc-cell { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; }
 .cell-empty { color: var(--grid); }
 
 /* ---- get fresh data ---- */

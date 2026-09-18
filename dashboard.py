@@ -156,6 +156,27 @@ def parse_pi_dashboard(path):
     return rows
 
 
+def _desc_columns(headers, prefix):
+    """Columns on one side (L_/NL_) that can hold a line description — an
+    expense report title, a PO text, a payroll comment. Report layouts get
+    renamed, so match on shape instead of hard-coding one column name; when
+    several exist, a TITLE outranks a DESC outranks a COMMENT."""
+    rank = {"TITLE": 0, "DESC": 1, "COMMENT": 2}
+    hits = [h for h in headers or []
+            if (h or "").upper().startswith(prefix)
+            and any(w in h.upper() for w in rank)]
+    hits.sort(key=lambda h: min(v for w, v in rank.items() if w in h.upper()))
+    return hits
+
+
+def _first_desc(row, cols):
+    for c in cols:
+        v = (row.get(c) or "").strip()
+        if v:
+            return v
+    return ""
+
+
 def parse_detail(path, labor, nonlabor, meta):
     """Parse an RPT_GMS_007 'Sponsored Project Detail Report' export.
 
@@ -165,7 +186,10 @@ def parse_detail(path, labor, nonlabor, meta):
     passed-in dicts so several export files merge cleanly.
     """
     with open(path, encoding="utf-8-sig", newline="") as f:
-        for r in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        l_desc_cols = _desc_columns(reader.fieldnames, "L_")
+        nl_desc_cols = _desc_columns(reader.fieldnames, "NL_")
+        for r in reader:
             proj = (r.get("PROJ_NUMBER") or "").strip()
             if not proj:
                 continue
@@ -191,11 +215,12 @@ def parse_detail(path, labor, nonlabor, meta):
             l_trx = (r.get("L_TRX_NUM") or "").strip()
             l_amt = fnum(r.get("L_EXP_COST"))
             if l_trx or l_amt is not None:
+                l_desc = _first_desc(r, l_desc_cols)
                 key = (proj, l_trx, (r.get("L_LAB_TRX") or "").strip(),
                        (r.get("L_PER_NUM") or "").strip(),
                        (r.get("L_EXP_DATE") or "").strip(),
                        (r.get("L_EXP_TYPE") or "").strip(),
-                       r.get("L_EXP_COST"))
+                       r.get("L_EXP_COST"), l_desc)
                 if key not in labor:
                     labor[key] = {
                         "project": proj,
@@ -205,6 +230,7 @@ def parse_detail(path, labor, nonlabor, meta):
                         "type": (r.get("L_EXP_TYPE") or "").strip(),
                         "date": fdate(r.get("L_EXP_DATE")),
                         "person": (r.get("L_PER_NAME") or "").strip(),
+                        "desc": l_desc,
                         "amount": l_amt or 0.0,
                     }
 
@@ -212,11 +238,12 @@ def parse_detail(path, labor, nonlabor, meta):
             nl_trx = (r.get("NL_TRX_NUM") or "").strip()
             nl_amt = fnum(r.get("NL_EXP_COST"))
             if nl_trx or nl_amt is not None:
+                nl_desc = _first_desc(r, nl_desc_cols)
                 key = (proj, nl_trx,
                        (r.get("NL_EXP_DATE") or "").strip(),
                        (r.get("NL_EXP_TYPE") or "").strip(),
                        (r.get("NL_PER_NAME") or "").strip(),
-                       r.get("NL_EXP_COST"))
+                       r.get("NL_EXP_COST"), nl_desc)
                 if key not in nonlabor:
                     nonlabor[key] = {
                         "project": proj,
@@ -226,6 +253,7 @@ def parse_detail(path, labor, nonlabor, meta):
                         "type": (r.get("NL_EXP_TYPE") or "").strip(),
                         "date": fdate(r.get("NL_EXP_DATE")),
                         "person": (r.get("NL_PER_NAME") or "").strip(),
+                        "desc": nl_desc,
                         "amount": nl_amt or 0.0,
                     }
 
@@ -818,14 +846,16 @@ def import_from_inbox(names, inbox_dir, data_dir):
 def charges_response(query, data_dir):
     """Filtered transaction list for /api/charges (the charge lookup section).
 
-    ?project=SPN107048&from=2026-06-01&to=2026-09-18 — one project, inclusive
-    date bounds (both optional). Charges the export left undated are always
+    ?project=SPN107048&project=SPN107049&from=2026-06-01&to=2026-09-18 —
+    one or more projects (repeated, or space/comma separated), inclusive date
+    bounds (both optional). Each charge carries its project so a combined
+    lookup stays attributable. Charges the export left undated are always
     included and counted separately, so nothing disappears silently.
     """
     codes = spn_reports.normalize_projects(query.get("project", []))
-    if len(codes) != 1:
-        raise ValueError("pass exactly one project, e.g. ?project=SPN107048")
-    project = codes[0]
+    if not codes:
+        raise ValueError("pass at least one project, e.g. ?project=SPN107048")
+    wanted = set(codes)
     from_iso = to_iso = None
     if _one(query, "from"):
         from_iso = spn_reports.parse_date(_one(query, "from")).isoformat()
@@ -836,19 +866,20 @@ def charges_response(query, data_dir):
 
     charges, undated, total = [], 0, 0.0
     for t in load_transactions(data_dir):
-        if t["project"] != project:
+        if t["project"] not in wanted:
             continue
         if t["date"] is None:
             undated += 1
         elif (from_iso and t["date"] < from_iso) or (to_iso and t["date"] > to_iso):
             continue
         charges.append({k: t[k] for k in
-                        ("date", "kind", "trx", "category", "type", "person", "amount")})
+                        ("project", "date", "kind", "trx", "category", "type",
+                         "person", "desc", "amount")})
         total += t["amount"]
     # newest first; undated lines sink to the bottom
     charges.sort(key=lambda c: (c["date"] is not None, c["date"] or ""), reverse=True)
     return {
-        "project": project,
+        "projects": codes,
         "from": from_iso,
         "to": to_iso,
         "count": len(charges),

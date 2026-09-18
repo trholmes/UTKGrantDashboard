@@ -7,10 +7,12 @@ already pull from the university reporting system, and gives you:
   category, spending pace vs. time elapsed, monthly burn rate, and runway.
 * **Automatic flags** — overspent categories, charges against $0 budget
   lines, awards ending soon with money unspent, on-pace-to-overrun warnings.
-* **Charge lookup** — pick an award (SPN) and a date window and see every
-  transaction that posted to it: a month-by-month grid per expenditure type
-  where a charge you expected but don't see stands out as a gap, plus the
-  full searchable line-by-line list with transaction numbers.
+* **Charge lookup** — pick one or more awards (SPNs) and a date window and
+  see every transaction that posted to them: a month-by-month grid per
+  expenditure type where a charge you expected but don't see stands out as a
+  gap, plus the full searchable line-by-line list with transaction numbers
+  and each line's description (the expense report title, when the export
+  carries a description/title/comment column).
 * **Hiring & departure planning in the People table** — people are seeded
   automatically from the payroll lines in your detail export, with their
   real salaries, fringe rates, and support splits. Add a person and pick
