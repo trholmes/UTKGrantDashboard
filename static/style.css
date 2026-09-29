@@ -344,6 +344,10 @@ input.extra-in, input.tpl-in { font-size: 12.5px; }
 input.url-box { width: 100%; font-size: 11.5px; color: var(--ink-2); }
 .btn.bookmarklet { border-color: var(--series-3); color: var(--series-3); cursor: grab; }
 
+.getdata-step.just-now { border-color: var(--series-1); transition: border-color 1.5s; }
+.inbox-block { margin-top: 12px; }
+.inbox-block .hint { margin-bottom: 4px; }
+.have-note { color: var(--good-text); font-size: 12.5px; margin-bottom: 4px; }
 .inbox-row {
   display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
   padding: 7px 0; border-top: 1px solid var(--grid); font-size: 12.5px;

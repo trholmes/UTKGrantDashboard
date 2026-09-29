@@ -11,10 +11,12 @@ and drop it in here for you — see the README. Any `report_source.json` you
 put here overrides where that download points (host, catalog path, report
 layout name).
 
-Looking after several PIs? Make a folder in here per PI (`Holmes/`,
-`Doe, Jane/` — the dashboard's **+ New PI folder** button does it) and keep
-each PI's exports in their own folder; the page header then has a menu to
-switch between them, and each folder gets its own saved scenarios.
+Looking after several PIs? Give each one a folder in here (`Holmes/`,
+`Doe, Jane/`) with the dashboard's **+ New PI folder** button, which also
+lists the folder in `pi_folders.json` — only listed folders count as PI
+folders, so anything else you keep in here is left alone. The page header
+then has a menu to switch between them, and each folder gets its own
+saved scenarios.
 
 Everything in this folder except this README is git-ignored (subfolders
 included), so your financial data can never be committed or pushed. Saved

@@ -315,13 +315,15 @@ function setupSections() {
     });
   }
   const collapsed = CFG.ui.collapsed || {};
-  if (collapsed.getdata === undefined) {
-    // wide open on a first run with no exports yet; tucked away once there
-    // is data to look at (the header button re-opens it)
-    collapsed.getdata = DATA.files.some((f) => f.type !== 'unrecognized');
-  }
+  // Get fresh data is wide open on a first run with no exports yet, and
+  // tucked away once there is data to look at (the header button re-opens
+  // it). Only a click on its header is remembered, so the default can
+  // change as exports arrive.
+  const hasData = DATA.files.some((f) => f.type !== 'unrecognized');
   document.querySelectorAll('section.collapsible').forEach((sec) => {
-    sec.classList.toggle('collapsed', !!collapsed[sec.dataset.key]);
+    const key = sec.dataset.key;
+    const state = collapsed[key] !== undefined ? collapsed[key] : (key === 'getdata' && hasData);
+    sec.classList.toggle('collapsed', !!state);
   });
 }
 
@@ -1945,7 +1947,8 @@ let LINKS = null;          // last /api/report-links response
 let INBOX = null;          // last /api/inbox response
 let inboxTimer = null;     // poll handle, live for a minute after a download
 let watchingSince = null;  // epoch seconds; files newer than this are "new"
-let lastImport = null;     // {names, at} — the "imported ✓" note
+let watchingKind = null;   // which export the watch is for: 'pi_dashboard' | 'detail'
+let lastImport = null;     // {names, at, into, kind} — the "imported ✓" note
 
 function fetchState() {
   const ui = CFG.ui;
@@ -2026,8 +2029,13 @@ function renderGetData() {
     dash.append(el('a', {
       class: 'btn', href: DATA.reportSource.piDashboardUrl,
       target: '_blank', rel: 'noopener',
+      // exporting by hand takes a few minutes: watch Downloads for a while
+      onclick: () => startWatching('pi_dashboard', 10 * 60000),
     }, 'Open PI Dashboard ↗'));
   }
+  // the export has to end up in the data folder before step 2 can list
+  // its projects — so its import lives right here
+  dash.append(el('div', { class: 'inbox-block', id: 'inbox-dash' }));
   box.append(dash);
 
   // step 2 — the detail export, which is one click
@@ -2052,7 +2060,7 @@ function renderGetData() {
 
   const known = DATA.projects.length;
   const allOn = st.excluded.length === 0;
-  const detail = el('div', { class: 'getdata-step' },
+  const detail = el('div', { class: 'getdata-step', id: 'getdata-step-2' },
     el('div', { class: 'step-head' }, el('span', { class: 'step-num' }, '2'),
       'Expenditure detail report — transactions, salaries, F&A'),
     el('div', { class: 'hint' }, known
@@ -2091,7 +2099,7 @@ function renderGetData() {
   // no href until the URL is built, which the stylesheet shows as disabled
   const link = el('a', {
     class: 'btn primary', id: 'dl-link', target: '_blank', rel: 'noopener',
-    onclick: () => { if (LINKS) startWatching(); },
+    onclick: () => { if (LINKS) startWatching('detail'); },
   }, '⬇ Download detail report CSV');
   const extraLinks = el('div', { class: 'dl-extra', id: 'dl-extra' });
   detail.append(el('div', { class: 'getdata-row dl-row' }, link,
@@ -2101,14 +2109,9 @@ function renderGetData() {
     }, 'Copy link'),
     el('span', { class: 'hint dl-status', id: 'dl-status' }, 'Building link…')),
     extraLinks,
-    troubleshooting(st));
+    troubleshooting(st),
+    el('div', { class: 'inbox-block', id: 'inbox-detail' }));
   box.append(detail);
-
-  // step 3 — the file has to end up in data/
-  box.append(el('div', { class: 'getdata-step', id: 'inbox-step' },
-    el('div', { class: 'step-head' }, el('span', { class: 'step-num' }, '3'),
-      'Import what you downloaded' + (PI ? ' into ' + folderLabel() : '')),
-    el('div', { id: 'inbox' })));
 
   // several PIs' data on one machine: a folder each
   const prof = DATA.profile;
@@ -2204,7 +2207,7 @@ async function refreshLinks() {
     for (const l of LINKS.links.slice(1)) {
       extra.append(el('a', {
         class: 'btn btn-x', href: l.url, target: '_blank', rel: 'noopener',
-        onclick: () => startWatching(),
+        onclick: () => startWatching('detail'),
       }, l.label));
     }
   }
@@ -2235,13 +2238,15 @@ function selectUrlBox() {
 
 /* ----- the Downloads folder ----- */
 
-function startWatching() {
-  // a download was just started; watch for the file for a minute
+function startWatching(kind, ms) {
+  // a download was just started (or the PI Dashboard just opened for an
+  // export by hand); watch Downloads for the file for a while
   watchingSince = Date.now() / 1000 - 5;
+  watchingKind = kind;
   clearInterval(inboxTimer);
-  const until = Date.now() + 60000;
+  const until = Date.now() + (ms || 60000);
   inboxTimer = setInterval(() => {
-    if (Date.now() > until) { clearInterval(inboxTimer); inboxTimer = null; }
+    if (Date.now() > until) { clearInterval(inboxTimer); inboxTimer = null; renderInbox(); return; }
     refreshInbox();
   }, 2000);
   refreshInbox();
@@ -2264,7 +2269,7 @@ function isReady(f) {
 }
 
 async function refreshInbox() {
-  if (!$('#inbox')) return;
+  if (!$('#inbox-detail')) return;
   try {
     const res = await fetch(api('/api/inbox'));
     INBOX = await res.json();
@@ -2281,40 +2286,62 @@ async function refreshInbox() {
 }
 
 function renderInbox() {
-  const box = $('#inbox');
-  if (!box) return;
-  const st = fetchState();
-  box.replaceChildren();
+  // Each step gets its own import list: PI Dashboard exports under step 1
+  // (step 2's project checkboxes come from that file), detail reports
+  // under step 2. Each also confirms what the data folder already holds.
+  const boxes = { pi_dashboard: $('#inbox-dash'), detail: $('#inbox-detail') };
+  if (!boxes.pi_dashboard || !boxes.detail) return;
+  for (const kind of Object.keys(boxes)) {
+    const box = boxes[kind];
+    box.replaceChildren();
+    const have = DATA.files.filter((f) => f.type === kind);
+    if (have.length) {
+      box.append(el('div', { class: 'have-note' }, '✓ In ' + folderLabel() + ': '
+        + have.map((f) => `${f.name} (${f.modified})`).join(', ')));
+    }
+  }
   if (!INBOX || !INBOX.dir) {
-    box.append(el('div', { class: 'hint' },
-      'Not watching a downloads folder. Move the downloaded CSV into the '
-      + 'data/ folder yourself, then click Reload data. (Point the dashboard '
+    boxes.pi_dashboard.append(el('div', { class: 'hint' },
+      'Not watching a downloads folder. Move each downloaded CSV into '
+      + folderLabel() + ' yourself, then click Reload data. (Point the dashboard '
       + 'at your downloads folder with --downloads to get one-click imports.)'));
     return;
   }
-  const files = INBOX.files || [];
-  const pending = files.filter((f) => !f.imported);
   if (lastImport && Date.now() - lastImport.at < 60000) {
-    box.append(el('div', { class: 'imported-note' },
+    boxes[lastImport.kind || 'detail'].append(el('div', { class: 'imported-note' },
       'Imported ' + lastImport.names.join(', ') + ' into ' + lastImport.into + ' ✓'));
   }
-  box.append(el('div', { class: 'hint' },
-    inboxTimer ? 'Watching ' + INBOX.dir + ' for the download…'
-      : 'Exports found in ' + INBOX.dir + ':'));
-  if (!pending.length) {
-    box.append(el('div', { class: 'flag-empty' },
-      files.length ? 'Everything there is already in ' + folderLabel() + '.'
-        : (INBOX.unrecognized || []).length ? 'No export to import yet — but see below.'
-          : 'Nothing to import yet.'));
+  const files = INBOX.files || [];
+  inboxBlock(boxes.pi_dashboard, 'pi_dashboard',
+    files.filter((f) => f.type === 'pi_dashboard'), INBOX.unrecognized || []);
+  inboxBlock(boxes.detail, 'detail', files.filter((f) => f.type === 'detail'), []);
+}
+
+function inboxBlock(box, kind, files, unrecognized) {
+  const st = fetchState();
+  const pending = files.filter((f) => !f.imported);
+  const watching = inboxTimer && watchingKind === kind;
+  const have = DATA.files.some((f) => f.type === kind);
+  const what = kind === 'detail' ? 'detail report' : 'PI Dashboard export';
+  let lead;
+  if (watching) {
+    lead = 'Watching ' + INBOX.dir + ' for the download…';
+  } else if (pending.length) {
+    lead = `${what.charAt(0).toUpperCase() + what.slice(1)}${pending.length === 1 ? '' : 's'} in `
+      + INBOX.dir + ' — import into ' + folderLabel() + ':';
+  } else if (kind === 'pi_dashboard' && !have) {
+    lead = 'Then import the export: it appears here when it lands in ' + INBOX.dir
+      + ', and step 2 lists its projects.';
+  } else {
+    lead = 'No new ' + what + ' in ' + INBOX.dir + '.';
   }
+  box.append(el('div', { class: 'hint' }, lead));
   const manyFolders = DATA.profile && DATA.profile.profiles.length > 0;
   for (const f of pending) {
     const elsewhere = belongsElsewhere(f);
     const others = (f.importedTo || []).filter((n) => n !== PI);
     const row = el('div', { class: 'inbox-row' + (isNewFile(f) ? ' fresh' : '') },
       el('span', { class: 'inbox-name' }, f.name),
-      el('span', { class: 'badge' },
-        f.type === 'detail' ? 'detail report' : 'PI Dashboard'),
       el('span', { class: 'muted-cell' }, f.modified + ' · ' + fmtBytes(f.size)));
     if (manyFolders && f.pi) {
       row.append(el('span', { class: 'badge' }, 'PI: ' + f.pi));
@@ -2344,7 +2371,7 @@ function renderInbox() {
   }
   // recent downloads that are not an export: name them, with the reason,
   // so "nothing to import" never hides the file someone just saved
-  for (const f of INBOX.unrecognized || []) {
+  for (const f of unrecognized) {
     box.append(el('div', { class: 'inbox-row unrecognized' },
       el('span', { class: 'inbox-name' }, f.name),
       el('span', { class: 'badge warn' }, 'not an export'),
@@ -2358,18 +2385,22 @@ function renderInbox() {
       class: 'btn', onclick: () => importFiles(ready.map((f) => f.name)),
     }, 'Import all ' + ready.length));
   }
-  row.append(el('button', { class: 'btn', onclick: refreshInbox }, 'Check again'));
-  row.append(el('label', { class: 'check' },
-    el('input', {
-      type: 'checkbox', checked: st.autoImport || null,
-      onchange: (e) => { st.autoImport = e.target.checked; save(); },
-    }), ' Import new exports automatically'));
+  row.append(el('button', { class: 'btn btn-x', onclick: refreshInbox }, 'Check again'));
+  if (kind === 'detail') {
+    row.append(el('label', { class: 'check' },
+      el('input', {
+        type: 'checkbox', checked: st.autoImport || null,
+        onchange: (e) => { st.autoImport = e.target.checked; save(); },
+      }), ' Import new exports automatically'));
+  }
   box.append(row);
 }
 
 async function importFiles(names, target) {
   // target: another PI folder to import into (default: this page's)
-  const box = $('#inbox');
+  const first = (INBOX && INBOX.files || []).find((f) => names.includes(f.name));
+  const kind = first ? first.type : 'detail';
+  const box = $(kind === 'pi_dashboard' ? '#inbox-dash' : '#inbox-detail');
   const into = target === undefined ? PI : target;
   const note = el('div', { class: 'hint' },
     'Copying ' + names.join(', ') + ' into ' + folderLabel(into) + '…');
@@ -2384,8 +2415,20 @@ async function importFiles(names, target) {
       clearInterval(inboxTimer);
       inboxTimer = null;
       watchingSince = null;
-      lastImport = { names: result.imported, at: Date.now(), into: folderLabel(into) };
+      lastImport = { names: result.imported, at: Date.now(), into: folderLabel(into), kind };
       await load();   // re-parse and redraw everything, including this section
+      if (kind === 'pi_dashboard' && into === PI) {
+        // the projects it named are now step 2's checkboxes: move on to it
+        // (the section would otherwise tuck itself away now that data exists)
+        $('#getdata-section').classList.remove('collapsed');
+        const step = $('#getdata-step-2');
+        if (step) {
+          // a beat later, once the sections above have settled their height
+          setTimeout(() => step.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+          step.classList.add('just-now');
+          setTimeout(() => step.classList.remove('just-now'), 2500);
+        }
+      }
       return;
     }
   } catch (err) {

@@ -140,7 +140,12 @@ projections to anchor to.
    the wrong tab rather than read.
 3. Enter your name in **Project PI / Manager**.
 4. Export the Project Summary table as **CSV** (Export → Data → CSV, not
-   the Excel workbook) and drop it in `data/`.
+   the Excel workbook). If you opened the PI Dashboard from the
+   dashboard's *Get fresh data* step 1, the export shows up under that
+   step when it lands in Downloads, with an **Import** button (or is
+   imported for you, with *Import new exports automatically* on), and
+   the page moves on to step 2; otherwise drop it in `data/` yourself.
+   Step 2 lists the projects it names, so it comes first.
 
 ### 2. Expenditure detail report — strongly recommended
 
@@ -164,7 +169,8 @@ dashboard, open **Get fresh data** (button in the header):
    CSV straight to your Downloads folder.
 4. The dashboard notices the new file and imports it into `data/` for you
    (untick *Import new exports automatically* if you'd rather press the
-   Import button yourself).
+   Import button under step 2 yourself). Each step also confirms which
+   of its exports the data folder already holds.
 
 If nothing downloads, expand *Nothing downloaded, or using Safari?*: it
 gives you the raw URL to paste into the logged-in tab's address bar, and a
@@ -218,21 +224,26 @@ dashboard of its own: that PI's exports, their People table, their
 scenarios and overrides (`config.json`), all separate.
 
 * **Creating a folder:** open **Get fresh data** and click **+ New PI
-  folder** (or make the folder in Finder/Explorer). The header then shows a
-  **PI** menu listing every folder; the menu switches the whole page,
-  including *Get fresh data*, to that PI. The page's address carries the
-  choice (`?pi=Holmes`), so a browser tab per PI works too.
+  folder**. That makes the folder and lists it in `data/pi_folders.json`;
+  only folders listed there count, so a stray subfolder in `data/` (old
+  exports, a backup) never changes the page. A folder you made by hand
+  joins the list when you enter its name in **+ New PI folder**. Once a
+  PI folder exists the header shows a **PI** menu listing every folder;
+  the menu switches the whole page, including *Get fresh data*, to that
+  PI. The page's address carries the choice (`?pi=Holmes`), so a browser
+  tab per PI works too.
 * **Getting a PI's exports in:** switch to their folder first. Step 1
-  opens the PI Dashboard where you enter *that* PI's name; step 2's
-  download link covers the projects in that folder; step 3 imports the
-  download into that folder. Nothing is ever moved between folders, and
-  `data/config.json`-style scenario edits save into the PI's folder.
+  opens the PI Dashboard where you enter *that* PI's name and imports
+  the export into that folder; step 2's download link covers the
+  projects in that folder and imports the detail report the same way.
+  Nothing is ever moved between folders, and `data/config.json`-style
+  scenario edits save into the PI's folder.
 * **Whose file is this?** The Downloads folder is shared, and the
-  reporting system names every export the same way. Step 3 reads the PI
-  name inside a PI Dashboard export, and the project numbers inside a
-  detail export, and matches them against what each PI folder already
-  holds: a file that belongs to another PI is labelled *looks like
-  Lee's* with an **Import into data/Lee** button, is never imported
+  reporting system names every export the same way. The import lists
+  read the PI name inside a PI Dashboard export, and the project numbers
+  inside a detail export, and match them against what each PI folder
+  already holds: a file that belongs to another PI is labelled *looks
+  like Lee's* with an **Import into data/Lee** button, is never imported
   automatically into the wrong folder, and a file already sitting in
   another folder says so.
 * `report_source.json` in `data/` applies to every PI folder; one inside
