@@ -78,6 +78,108 @@ function showTip(text, x, y) {
 }
 function hideTip() { tooltip().hidden = true; }
 
+/* ---------- amount entries ---------- */
+/* Money boxes are plain text inputs run through evalAmount, so a pasted
+   "$12,500" reads as 12500 instead of silently becoming zero, and quick
+   what-ifs like "5200/2" or "2600*1.03" work in place. */
+
+// Returns a number, null for an empty box, or NaN for text that can't be
+// read — thousands commas, $ and spaces are ignored; + - * / and parens
+// are evaluated (no exponentiation, no names, nothing else).
+function evalAmount(text) {
+  const s = String(text ?? '').replace(/[$,\s_]/g, '');
+  if (s === '') return null;
+  if (!/^[0-9.+\-*/()]+$/.test(s)) return NaN;
+  let i = 0;
+  const bad = () => { i = -1; return NaN; };
+  const number = () => {
+    const m = /^(\d+\.?\d*|\.\d+)/.exec(s.slice(i));
+    if (!m) return bad();
+    i += m[0].length;
+    return parseFloat(m[0]);
+  };
+  const factor = () => {
+    if (i < 0) return NaN;
+    if (s[i] === '-') { i++; return -factor(); }
+    if (s[i] === '+') { i++; return factor(); }
+    if (s[i] === '(') {
+      i++;
+      const v = expr();
+      if (i < 0 || s[i] !== ')') return bad();
+      i++;
+      return v;
+    }
+    return number();
+  };
+  const term = () => {
+    let v = factor();
+    while (i >= 0 && (s[i] === '*' || s[i] === '/')) {
+      const op = s[i++];
+      const r = factor();
+      v = op === '*' ? v * r : v / r;
+    }
+    return v;
+  };
+  const expr = () => {
+    let v = term();
+    while (i >= 0 && (s[i] === '+' || s[i] === '-')) {
+      const op = s[i++];
+      const r = term();
+      v = op === '+' ? v + r : v - r;
+    }
+    return v;
+  };
+  const v = expr();
+  return i === s.length && Number.isFinite(v) ? v : NaN;
+}
+
+// A text box for a money/percent figure. onSet(v) gets the parsed number
+// (null when the box is emptied) on every valid keystroke; unreadable text
+// turns the box red and leaves the stored value alone. Leaving the box
+// replaces an expression with its result. Arrow keys step like a number
+// input used to.
+function amountInput(opts) {
+  const { value, onSet, onBlur, step = 1, decimals = 2 } = opts;
+  const show = (v) => (v === null || v === undefined || v === ''
+    ? '' : String(Math.round(v * 10 ** decimals) / 10 ** decimals));
+  const inp = el('input', {
+    type: 'text', inputmode: 'decimal', autocomplete: 'off', spellcheck: 'false',
+    class: 'amount' + (opts.class ? ' ' + opts.class : ''),
+    placeholder: opts.placeholder, title: opts.title,
+    value: show(value),
+  });
+  const baseTitle = opts.title || '';
+  const check = () => {
+    const v = evalAmount(inp.value);
+    const invalid = Number.isNaN(v);
+    inp.classList.toggle('invalid', invalid);
+    inp.title = invalid
+      ? `Can't read “${inp.value}” — use digits, and + - * / ( ) for quick math`
+      : baseTitle;
+    return v;
+  };
+  inp.addEventListener('input', () => {
+    const v = check();
+    if (!Number.isNaN(v)) onSet(v);
+  });
+  inp.addEventListener('blur', () => {
+    const v = check();
+    if (!Number.isNaN(v)) inp.value = show(v);  // "5200/2" -> "2600"
+    if (onBlur) onBlur();
+  });
+  inp.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const v = evalAmount(inp.value);
+    if (Number.isNaN(v)) return;
+    e.preventDefault();
+    const next = (v || 0) + (e.key === 'ArrowUp' ? step : -step);
+    inp.value = show(next);
+    check();
+    onSet(next);
+  });
+  return inp;
+}
+
 /* ---------- data loading & config ---------- */
 
 async function load() {
@@ -970,15 +1072,13 @@ function renderPortfolio() {
       endInput.addEventListener('blur', () => renderPortfolio());
       card.append(el('div', { class: 'baseline-ctl' },
         'Expected additional funding: $',
-        el('input', {
-          type: 'number', step: 1000, min: 0, placeholder: '0',
-          value: ov.expectedExtra ?? '',
-          oninput: (e) => {
-            const v = parseFloat(e.target.value);
-            ov.expectedExtra = isNaN(v) || v <= 0 ? null : v;
+        amountInput({
+          step: 1000, placeholder: '0', value: ov.expectedExtra,
+          onSet: (v) => {
+            ov.expectedExtra = v === null || v <= 0 ? null : v;
             save(); renderSummary();
           },
-          onblur: () => renderPortfolio(),
+          onBlur: () => renderPortfolio(),
         }),
         el('span', { class: 'sep' }, 'new end'),
         endInput));
@@ -1064,12 +1164,11 @@ function renderPeople() {
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
     const grayedOut = filter.filterActive && !onSelected(person, det);
-    const numIn = (key, scale, step) => el('input', {
-      type: 'number', step: step || 1,
-      value: scale ? Math.round(person[key] * scale * 100) / 100 : Math.round(person[key] * 100) / 100,
-      oninput: (e) => {
-        const v = parseFloat(e.target.value);
-        person[key] = isNaN(v) ? 0 : (scale ? v / scale : v);
+    const numIn = (key, scale, step) => amountInput({
+      step: step || 1,
+      value: scale ? person[key] * scale : person[key],
+      onSet: (v) => {
+        person[key] = v === null ? 0 : (scale ? v / scale : v);
         save(); renderSummary(); renderPortfolio();
       },
     });
@@ -1111,13 +1210,12 @@ function renderPeople() {
           return inp;
         })(),
         ' → $',
-        el('input', {
-          type: 'number', step: 50, placeholder: 'new /mo', class: 'newpay',
-          value: person.payChangeSalary ?? '',
+        amountInput({
+          step: 50, placeholder: 'new /mo', class: 'newpay',
+          value: person.payChangeSalary,
           title: 'new monthly salary from that month on',
-          oninput: (e) => {
-            const v = parseFloat(e.target.value);
-            person.payChangeSalary = isNaN(v) ? null : v;
+          onSet: (v) => {
+            person.payChangeSalary = v;
             save(); renderSummary(); renderPortfolio();
           },
         })),
@@ -1136,12 +1234,11 @@ function renderPeople() {
       }, '✕'))));
   }
   const esc = CFG.escalation;
-  const escIn = (key, title) => el('input', {
-    type: 'number', step: 0.5, class: 'esc-in', title,
-    value: Math.round(esc[key] * 1000) / 10,
-    oninput: (e) => {
-      const v = parseFloat(e.target.value);
-      esc[key] = isNaN(v) ? 0 : v / 100;
+  const escIn = (key, title) => amountInput({
+    step: 0.5, class: 'esc-in', title, decimals: 1,
+    value: esc[key] * 100,
+    onSet: (v) => {
+      esc[key] = (v || 0) / 100;
       save(); renderSummary(); renderPortfolio();
     },
   });

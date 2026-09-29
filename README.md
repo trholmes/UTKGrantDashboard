@@ -184,6 +184,10 @@ Notes:
   existing balance carries to the new end), an **expected end date** per
   person (graduation / rotating off your funding), and a scheduled **pay
   change** per person ("from month X, salary becomes $Y").
+* Amount boxes accept what you paste (`$12,500`, `12,500.50`) and quick
+  math (`5200/2` to put a student on a grant at 50%, `2600*1.03`). A box
+  turns red when it can't read its contents, and the stored value is left
+  alone until it can.
 * Scenario edits (people, assignments, expectations, overrides) save to
   `data/config.json` — local and git-ignored, like everything else in
   `data/`.

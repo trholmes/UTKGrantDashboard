@@ -192,7 +192,7 @@ table.people { min-width: 960px; }
 table.people th, table.people td { padding: 4px 8px; white-space: nowrap; }
 table.people input { padding: 2px 5px; font-size: 12.5px; }
 table.people td.name-cell input { width: 88px; }
-table.people input[type="number"] { width: 68px; text-align: right; }
+table.people input.amount { width: 68px; text-align: right; }
 table.people input.newpay { width: 86px; }
 input.month-in { width: 80px; }
 input::placeholder { color: var(--muted); opacity: 1; }
@@ -209,9 +209,11 @@ input, select {
   border-radius: 6px; padding: 3px 7px;
 }
 /* no spinner arrows on number fields — they're all type-in values */
-input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
-input[type="number"]::-webkit-inner-spin-button,
-input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input.amount { text-align: right; font-variant-numeric: tabular-nums; }
+input.amount.invalid {
+  border-color: var(--critical); color: var(--critical);
+  background: color-mix(in srgb, var(--critical) 10%, var(--surface));
+}
 .badge { font-size: 10.5px; color: var(--muted); border: 1px solid var(--grid); border-radius: 99px; padding: 1px 7px; }
 #add-person { margin-top: 10px; }
 
