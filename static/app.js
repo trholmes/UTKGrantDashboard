@@ -21,7 +21,7 @@ function el(tag, attrs, ...children) {
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
     else if (v !== undefined && v !== null && v !== false) node.setAttribute(k, v);
   }
-  for (const c of children.flat()) {
+  for (const c of children.flat(Infinity)) {
     if (c === null || c === undefined) continue;
     node.append(c.nodeType ? c : document.createTextNode(c));
   }
@@ -38,6 +38,10 @@ const fmtK = (v) => {
   return sign + '$' + Math.round(a);
 };
 const fmtPct = (v) => (v * 100).toFixed(0) + '%';
+const fmtCents = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+// rounded on the page, exact to the cent on hover
+const money = (v, suffix) => el('span', { class: 'money', title: fmtCents.format(v) }, fmt$(v) + (suffix || ''));
+const moneyK = (v) => el('span', { class: 'money', title: fmtCents.format(v) }, fmtK(v));
 const fmtBytes = (n) => (n >= 1e6 ? (n / 1e6).toFixed(0) + ' MB'
   : n >= 1e3 ? (n / 1e3).toFixed(0) + ' kB' : n + ' B');
 
@@ -73,6 +77,108 @@ function showTip(text, x, y) {
   t.style.top = (y - t.offsetHeight - pad < 0 ? y + pad : y - t.offsetHeight - pad) + 'px';
 }
 function hideTip() { tooltip().hidden = true; }
+
+/* ---------- amount entries ---------- */
+/* Money boxes are plain text inputs run through evalAmount, so a pasted
+   "$12,500" reads as 12500 instead of silently becoming zero, and quick
+   what-ifs like "5200/2" or "2600*1.03" work in place. */
+
+// Returns a number, null for an empty box, or NaN for text that can't be
+// read — thousands commas, $ and spaces are ignored; + - * / and parens
+// are evaluated (no exponentiation, no names, nothing else).
+function evalAmount(text) {
+  const s = String(text ?? '').replace(/[$,\s_]/g, '');
+  if (s === '') return null;
+  if (!/^[0-9.+\-*/()]+$/.test(s)) return NaN;
+  let i = 0;
+  const bad = () => { i = -1; return NaN; };
+  const number = () => {
+    const m = /^(\d+\.?\d*|\.\d+)/.exec(s.slice(i));
+    if (!m) return bad();
+    i += m[0].length;
+    return parseFloat(m[0]);
+  };
+  const factor = () => {
+    if (i < 0) return NaN;
+    if (s[i] === '-') { i++; return -factor(); }
+    if (s[i] === '+') { i++; return factor(); }
+    if (s[i] === '(') {
+      i++;
+      const v = expr();
+      if (i < 0 || s[i] !== ')') return bad();
+      i++;
+      return v;
+    }
+    return number();
+  };
+  const term = () => {
+    let v = factor();
+    while (i >= 0 && (s[i] === '*' || s[i] === '/')) {
+      const op = s[i++];
+      const r = factor();
+      v = op === '*' ? v * r : v / r;
+    }
+    return v;
+  };
+  const expr = () => {
+    let v = term();
+    while (i >= 0 && (s[i] === '+' || s[i] === '-')) {
+      const op = s[i++];
+      const r = term();
+      v = op === '+' ? v + r : v - r;
+    }
+    return v;
+  };
+  const v = expr();
+  return i === s.length && Number.isFinite(v) ? v : NaN;
+}
+
+// A text box for a money/percent figure. onSet(v) gets the parsed number
+// (null when the box is emptied) on every valid keystroke; unreadable text
+// turns the box red and leaves the stored value alone. Leaving the box
+// replaces an expression with its result. Arrow keys step like a number
+// input used to.
+function amountInput(opts) {
+  const { value, onSet, onBlur, step = 1, decimals = 2 } = opts;
+  const show = (v) => (v === null || v === undefined || v === ''
+    ? '' : String(Math.round(v * 10 ** decimals) / 10 ** decimals));
+  const inp = el('input', {
+    type: 'text', inputmode: 'decimal', autocomplete: 'off', spellcheck: 'false',
+    class: 'amount' + (opts.class ? ' ' + opts.class : ''),
+    placeholder: opts.placeholder, title: opts.title,
+    value: show(value),
+  });
+  const baseTitle = opts.title || '';
+  const check = () => {
+    const v = evalAmount(inp.value);
+    const invalid = Number.isNaN(v);
+    inp.classList.toggle('invalid', invalid);
+    inp.title = invalid
+      ? `Can't read “${inp.value}” — use digits, and + - * / ( ) for quick math`
+      : baseTitle;
+    return v;
+  };
+  inp.addEventListener('input', () => {
+    const v = check();
+    if (!Number.isNaN(v)) onSet(v);
+  });
+  inp.addEventListener('blur', () => {
+    const v = check();
+    if (!Number.isNaN(v)) inp.value = show(v);  // "5200/2" -> "2600"
+    if (onBlur) onBlur();
+  });
+  inp.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const v = evalAmount(inp.value);
+    if (Number.isNaN(v)) return;
+    e.preventDefault();
+    const next = (v || 0) + (e.key === 'ArrowUp' ? step : -step);
+    inp.value = show(next);
+    check();
+    onSet(next);
+  });
+  return inp;
+}
 
 /* ---------- data loading & config ---------- */
 
@@ -235,7 +341,9 @@ function renderSummary() {
     return;
   }
 
-  // checkbox chips: which awards feed this summary (and show as cards)
+  // checkbox chips: which awards feed this summary (and show as cards),
+  // with a one-click all/none toggle
+  const allOn = filter.selected.length === filter.all.length;
   box.append(el('div', { class: 'grant-filter' },
     filter.all.map((p) => el('label', { class: 'check' },
       el('input', {
@@ -246,7 +354,15 @@ function renderSummary() {
           CFG.ui.excluded = [...ex];
           save(); renderAll();
         },
-      }), ` ${p.shortName}`))));
+      }), ` ${p.shortName}`)),
+    filter.all.length > 1 ? el('button', {
+      class: 'btn btn-x grant-filter-all',
+      title: allOn ? 'Untick every award' : 'Tick every award',
+      onclick: () => {
+        CFG.ui.excluded = allOn ? filter.all.map((p) => p.id) : [];
+        save(); renderAll();
+      },
+    }, allOn ? 'Select none' : 'Select all') : null));
   if (missingNote) box.append(missingNote);
 
   const active = filter.selected;
@@ -287,22 +403,27 @@ function renderSummary() {
   // current team = people with a salary in the last 2 months of detail data,
   // plus manual people given planned support (future hires) — minus anyone
   // whose expected end has passed or whose support is all on unselected awards
+  // (a split entered in the People table overrides payroll's, and also
+  // brings back someone payroll hasn't paid lately)
   const team = [];
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
     if (person.endMonth && person.endMonth < curMonth) continue;
-    if (det && det.lastPaid && monthDiff(det.lastPaid, curMonth) <= 2
-        && shareMults(det).frac > 0) {
-      team.push({ person, det });
-    } else if (!det && (person.plannedSupport || []).length) {
-      const synth = {
+    const shares = supportShares(person, det);
+    if (!shares.length) continue;
+    let d;
+    if (det) {
+      const recent = det.lastPaid && monthDiff(det.lastPaid, curMonth) <= 2;
+      if (!recent && !hasSplitOverride(person)) continue;
+      d = { ...det, support: { month: det.support && det.support.month, shares } };
+    } else {
+      d = {
         facultySalary: false, paidMonthNums: [], salaryByProject: {},
         gra: (person.fringeRate || 0) < 0.13,  // grad-level fringe => GRA raises
-        support: { shares: person.plannedSupport.map((s) =>
-          ({ project: s.project, pct: (s.pct || 0) / 100 })) },
+        support: { shares },
       };
-      if (shareMults(synth).frac > 0) team.push({ person, det: synth });
     }
+    if (shareMults(d).frac > 0) team.push({ person, det: d });
   }
   // escalation: raises compound each August in projected months (UT and
   // GRA salary rates, plus a fees/tuition rate — editable in People).
@@ -460,21 +581,21 @@ function renderSummary() {
 
   card.append(el('div', { class: 'sim-stats' },
     stat('Active awards', String(active.length),
-      `${fmt$(totBudget)} total · ${fmt$(totSpent)} spent`),
-    stat('Available now', fmt$(available),
-      [(extraTotal > 0 ? `+ ${fmt$(extraTotal)} expected (entered manually) · ` : ''),
+      [money(totBudget), ' total · ', money(totSpent), ' spent']),
+    stat('Available now', money(available),
+      [(extraTotal > 0 ? ['+ ', money(extraTotal), ' expected (entered manually) · '] : ''),
        (expired > 0
-         ? el('span', { class: 'expires-warn' }, `${fmt$(expired)} expires unspent at this pace`)
+         ? el('span', { class: 'expires-warn' }, money(expired), ' expires unspent at this pace')
          : 'across all active awards')]),
-    stat('Current team', fmt$(baseMonthly) + '/mo',
+    stat('Current team', money(baseMonthly, '/mo'),
       `${yearRound.length} people year-round — salary+fringe+fees+their F&A`
         + (summerFolk.length
-          ? ` · ${fmt$(peakMonthly)}/mo in ${summerMonths} (${summerFolk.map((t) => t.person.name).join(', ')} summer salary)`
+          ? ` · ${fmtCents.format(peakMonthly)}/mo in ${summerMonths} (${summerFolk.map((t) => t.person.name).join(', ')} summer salary)`
           : '')
         + (team.some((t) => t.person.endMonth || t.person.payChangeMonth)
           ? ' · scheduled departures/pay changes applied' : '')),
     (() => {
-      const s = stat('Other spending', fmt$(otherTrend) + '/mo',
+      const s = stat('Other spending', money(otherTrend, '/mo'),
         '12-mo trend: travel, supplies, F&A on non-salary costs — personnel F&A and fees count with each person (hover for per-award breakdown)');
       s.title = otherBreakdown.join('\n');
       return s;
@@ -482,7 +603,7 @@ function renderSummary() {
     stat('Funded through', fmtMonth(fundedThrough),
       runsOut === null
         ? 'to the end of your last award'
-        : `bring in new money by then (${fmt$(unmet)} short through ${fmtMonth(horizon)})`,
+        : ['bring in new money by then (', money(unmet), ` short through ${fmtMonth(horizon)})`],
       runwayMonths >= 12 ? 'ok' : 'bad')));
 
   // ground the projection with reconstructed history: total available funds
@@ -746,7 +867,7 @@ function renderPortfolio() {
     }
     if (sf !== null) {
       card.append(meter('Budget spent', sf,
-        `${fmtPct(sf)} · ${fmt$(p.totals.remaining)} left`));
+        [`${fmtPct(sf)} · `, money(p.totals.remaining), ' left']));
     }
 
     // category table
@@ -762,9 +883,9 @@ function renderPortfolio() {
       const frac = c.budget > 0 ? c.spent / c.budget : (c.spent > 0 ? 1.01 : 0);
       tbl.append(el('tr', {},
         el('td', { title: c.category }, CAT_SHORT[c.category] || c.category),
-        el('td', {}, fmtK(c.budget)),
-        el('td', {}, fmtK(c.spent)),
-        el('td', { class: c.remaining < -0.5 ? 'neg' : '' }, fmtK(c.remaining)),
+        el('td', {}, moneyK(c.budget)),
+        el('td', {}, moneyK(c.spent)),
+        el('td', { class: c.remaining < -0.5 ? 'neg' : '' }, moneyK(c.remaining)),
         el('td', { class: 'catbar' },
           el('div', { class: 'track' },
             el('div', {
@@ -774,9 +895,9 @@ function renderPortfolio() {
     }
     tbl.append(el('tr', { class: 'total-row' },
       el('td', {}, 'Total award'),
-      el('td', {}, fmt$(p.totals.budget)),
-      el('td', {}, fmt$(p.totals.spent)),
-      el('td', { class: p.totals.remaining < -0.5 ? 'neg' : '' }, fmt$(p.totals.remaining)),
+      el('td', {}, money(p.totals.budget)),
+      el('td', {}, money(p.totals.spent)),
+      el('td', { class: p.totals.remaining < -0.5 ? 'neg' : '' }, money(p.totals.remaining)),
       el('td', {})));
     card.append(tbl);
 
@@ -894,7 +1015,7 @@ function renderPortfolio() {
       const extra = (p.burn.avg12 != null && p.burn.recent != null)
         ? ` · last 3 mo ${fmt$(p.burn.recent)}/mo` : '';
       card.append(el('div', { class: 'burn-line' },
-        'Burn ≈ ', el('b', {}, fmt$(burn) + '/mo'), ` (${src})${extra} · ${runTxt}`));
+        'Burn ≈ ', el('b', {}, money(burn, '/mo')), ` (${src})${extra} · ${runTxt}`));
     } else if (active && !hasMonthly) {
       card.append(el('div', { class: 'burn-line' },
         'No transaction detail loaded for this award — add an expenditure detail export (RPT…) for real burn rates.'));
@@ -918,7 +1039,7 @@ function renderPortfolio() {
             }),
             person.name,
             person.faculty ? el('span', { class: 'badge', style: 'margin-left:6px' }, 'PI summer') : null),
-          el('td', {}, stale ? '—' : fmt$(person.monthly) + '/mo'),
+          el('td', {}, stale ? '—' : money(person.monthly, '/mo')),
           el('td', { class: 'muted-cell' }, 'last paid ' + fmtMonth(person.lastPaid))));
       }
       section.append(tbl);
@@ -956,15 +1077,13 @@ function renderPortfolio() {
       endInput.addEventListener('blur', () => renderPortfolio());
       card.append(el('div', { class: 'baseline-ctl' },
         'Expected additional funding: $',
-        el('input', {
-          type: 'number', step: 1000, min: 0, placeholder: '0',
-          value: ov.expectedExtra ?? '',
-          oninput: (e) => {
-            const v = parseFloat(e.target.value);
-            ov.expectedExtra = isNaN(v) || v <= 0 ? null : v;
+        amountInput({
+          step: 1000, placeholder: '0', value: ov.expectedExtra,
+          onSet: (v) => {
+            ov.expectedExtra = v === null || v <= 0 ? null : v;
             save(); renderSummary();
           },
-          onblur: () => renderPortfolio(),
+          onBlur: () => renderPortfolio(),
         }),
         el('span', { class: 'sep' }, 'new end'),
         endInput));
@@ -1008,26 +1127,111 @@ function supportLabel(support) {
   return `${fmtMonth(support.month)}: ${parts.join(' · ')}`;
 }
 
-function plannedSupportCell(person) {
-  // manual people: one grant that will pay them, feeding the summary
-  // projection. Timing comes from the other columns: start someone later
-  // with salary 0 + a Pay change; stop them with Expected end.
+// Where a person's cost goes, as [{project, pct}] with pct in 0..1: the
+// split entered in the People table (person.plannedSupport, percentages)
+// when there is one, else payroll's most recent month from the export.
+function hasSplitOverride(person) {
+  return (person.plannedSupport || []).some((sh) => sh.project);
+}
+function supportShares(person, det) {
+  if (hasSplitOverride(person)) {
+    return person.plannedSupport
+      .filter((sh) => sh.project)
+      .map((sh) => ({ project: sh.project, pct: Math.max(0, sh.pct || 0) / 100 }));
+  }
+  return ((det && det.support && det.support.shares) || [])
+    .map((sh) => ({ project: sh.project, pct: Math.max(0, sh.pct || 0) }));
+}
+
+function supportCell(person, det) {
+  // The grants that pay this person, and what share of their salary each
+  // carries — one row per grant, with "+ split" to add another. Payroll
+  // people start from what the export shows and can be edited into a
+  // what-if (move them, 50/50 them); ↺ goes back to payroll. Timing comes
+  // from the other columns: start someone later with salary 0 + a Pay
+  // change; stop them with Expected end.
   const cell = el('td', { class: 'support-edit' });
-  const activeAwards = grantFilter().all;
-  const current = (person.plannedSupport || [])[0];
-  cell.append(el('select', {
-    title: 'Grant that will pay this person (100%). To start them later, set '
-      + 'salary 0 and schedule a Pay change; use Expected end to stop them.',
-    onchange: (e) => {
-      person.plannedSupport = e.target.value
-        ? [{ project: e.target.value, pct: 100 }] : [];
-      save(); renderSummary(); renderPortfolio(); renderPeople();
+  const rerender = () => { save(); renderSummary(); renderPortfolio(); renderPeople(); };
+  const overridden = hasSplitOverride(person);
+
+  if (det && !overridden) {
+    cell.append(el('div', { class: 'split-row' },
+      el('span', { class: 'muted-cell support-cell', title: supportLabel(det.support) },
+        supportLabel(det.support)),
+      el('button', {
+        class: 'btn btn-x', title: 'Change this split for the projection — move '
+          + 'them to another grant, or share them between grants',
+        onclick: () => {
+          person.plannedSupport = ((det.support && det.support.shares) || [])
+            .map((sh) => ({ project: sh.project, pct: Math.round((sh.pct || 0) * 1000) / 10 }));
+          if (!person.plannedSupport.length) person.plannedSupport = [{ project: '', pct: 100 }];
+          rerender();
+        },
+      }, 'edit')));
+    return cell;
+  }
+
+  // options: every active award, plus any award the split already names
+  // (so a share on a closed award still shows its name)
+  const options = grantFilter().all.map((a) => ({ id: a.id, name: a.shortName }));
+  const known = new Set(options.map((o) => o.id));
+  const shares = person.plannedSupport && person.plannedSupport.length
+    ? person.plannedSupport : (person.plannedSupport = [{ project: '', pct: 100 }]);
+  for (const sh of shares) {
+    if (sh.project && !known.has(sh.project)) {
+      const proj = DATA.projects.find((pp) => pp.id === sh.project);
+      options.push({ id: sh.project, name: proj ? proj.shortName : sh.project });
+      known.add(sh.project);
+    }
+  }
+
+  const total = el('span', { class: 'split-total' });
+  const updateTotal = () => {
+    const sum = shares.reduce((a, sh) => a + (sh.project ? Math.max(0, sh.pct || 0) : 0), 0);
+    const rounded = Math.round(sum * 10) / 10;
+    total.textContent = shares.length > 1 || Math.abs(sum - 100) > 0.05 ? `= ${rounded}%` : '';
+    total.classList.toggle('warn', sum > 100.05);
+    total.title = sum > 100.05
+      ? 'More than 100% of their salary — this counts them more than once'
+      : sum < 99.95
+        ? `${rounded}% of their salary is charged to your awards; the rest is paid from elsewhere`
+        : 'Whole salary charged to your awards';
+  };
+
+  const rows = shares.map((sh, idx) => el('div', { class: 'split-row' },
+    el('select', {
+      title: 'Grant that pays this share',
+      onchange: (e) => { sh.project = e.target.value; rerender(); },
     },
-  },
-    el('option', { value: '' }, '— pick a grant —'),
-    activeAwards.map((a) => el('option', {
-      value: a.id, selected: (current && a.id === current.project) || null,
-    }, a.shortName))));
+      el('option', { value: '' }, '— pick a grant —'),
+      options.map((o) => el('option', {
+        value: o.id, selected: o.id === sh.project || null,
+      }, o.name))),
+    amountInput({
+      value: sh.pct, step: 5, decimals: 1, class: 'pct-in',
+      title: 'share of their salary this grant carries',
+      onSet: (v) => {
+        sh.pct = v || 0;
+        save(); renderSummary(); renderPortfolio(); updateTotal();
+      },
+    }),
+    '%',
+    shares.length > 1 ? el('button', {
+      class: 'btn btn-x', title: 'Remove this share',
+      onclick: () => { shares.splice(idx, 1); rerender(); },
+    }, '✕') : null));
+  updateTotal();
+
+  cell.append(...rows, el('div', { class: 'split-row split-actions' },
+    el('button', {
+      class: 'btn btn-x', title: 'Add another grant to this person\'s support',
+      onclick: () => { shares.push({ project: '', pct: 0 }); rerender(); },
+    }, '+ split'),
+    total,
+    det ? el('button', {
+      class: 'btn btn-x', title: 'Back to the split payroll shows: ' + supportLabel(det.support),
+      onclick: () => { delete person.plannedSupport; rerender(); },
+    }, '↺ payroll') : null));
   return cell;
 }
 
@@ -1038,24 +1242,20 @@ function renderPeople() {
       el('th', {}, 'Name'), el('th', { class: 'num' }, 'Salary ($/mo)'),
       el('th', { class: 'num' }, 'Fringe (%)'), el('th', { class: 'num' }, 'Fees ($/yr)'),
       el('th', {}, 'Expected end'), el('th', {}, 'Pay change'),
-      el('th', {}, 'Current support'), el('th', {})));
+      el('th', {}, 'Support (grant · % of salary)'), el('th', {})));
 
   const filter = grantFilter();
-  const onSelected = (person, det) => {
-    const shares = (det && det.support && det.support.shares)
-      || (person.plannedSupport || []).map((s) => ({ project: s.project }));
-    return shares.some((sh) => filter.selectedSet.has(sh.project));
-  };
+  const onSelected = (person, det) =>
+    supportShares(person, det).some((sh) => filter.selectedSet.has(sh.project));
 
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
     const grayedOut = filter.filterActive && !onSelected(person, det);
-    const numIn = (key, scale, step) => el('input', {
-      type: 'number', step: step || 1,
-      value: scale ? Math.round(person[key] * scale * 100) / 100 : Math.round(person[key] * 100) / 100,
-      oninput: (e) => {
-        const v = parseFloat(e.target.value);
-        person[key] = isNaN(v) ? 0 : (scale ? v / scale : v);
+    const numIn = (key, scale, step) => amountInput({
+      step: step || 1,
+      value: scale ? person[key] * scale : person[key],
+      onSet: (v) => {
+        person[key] = v === null ? 0 : (scale ? v / scale : v);
         save(); renderSummary(); renderPortfolio();
       },
     });
@@ -1097,22 +1297,16 @@ function renderPeople() {
           return inp;
         })(),
         ' → $',
-        el('input', {
-          type: 'number', step: 50, placeholder: 'new /mo', class: 'newpay',
-          value: person.payChangeSalary ?? '',
+        amountInput({
+          step: 50, placeholder: 'new /mo', class: 'newpay',
+          value: person.payChangeSalary,
           title: 'new monthly salary from that month on',
-          oninput: (e) => {
-            const v = parseFloat(e.target.value);
-            person.payChangeSalary = isNaN(v) ? null : v;
+          onSet: (v) => {
+            person.payChangeSalary = v;
             save(); renderSummary(); renderPortfolio();
           },
         })),
-      det
-        ? el('td', {
-            class: 'muted-cell support-cell',
-            title: supportLabel(det.support),
-          }, supportLabel(det.support))
-        : plannedSupportCell(person),
+      supportCell(person, det),
       el('td', {}, el('button', {
         class: 'btn danger btn-x', title: 'Remove person',
         onclick: () => {
@@ -1122,12 +1316,11 @@ function renderPeople() {
       }, '✕'))));
   }
   const esc = CFG.escalation;
-  const escIn = (key, title) => el('input', {
-    type: 'number', step: 0.5, class: 'esc-in', title,
-    value: Math.round(esc[key] * 1000) / 10,
-    oninput: (e) => {
-      const v = parseFloat(e.target.value);
-      esc[key] = isNaN(v) ? 0 : v / 100;
+  const escIn = (key, title) => amountInput({
+    step: 0.5, class: 'esc-in', title, decimals: 1,
+    value: esc[key] * 100,
+    onSet: (v) => {
+      esc[key] = (v || 0) / 100;
       save(); renderSummary(); renderPortfolio();
     },
   });
@@ -1311,7 +1504,6 @@ let chargesText = '';     // client-side text filter (not persisted)
 let chargesShowAll = false;
 let chargesSeq = 0;       // drop out-of-order fetch responses
 
-const fmtCents = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
 function chargesState() {
   const ui = CFG.ui;
@@ -1523,7 +1715,7 @@ function renderChargesResults() {
     : MONTH_NAMES[+m.slice(5, 7) - 1] + ' ’' + m.slice(2, 4));
   const cell = (v) => (v === undefined
     ? el('td', { class: 'cell-empty' }, '—')
-    : el('td', { class: v < -0.005 ? 'neg' : '' }, fmt$(v)));
+    : el('td', { class: v < -0.005 ? 'neg' : '' }, money(v)));
 
   if (cols.length && rowList.length) {
     const grid = el('table', { class: 'cats charges-grid' });
@@ -1548,16 +1740,16 @@ function renderChargesResults() {
           r.person ? el('span', { class: 'muted-cell' }, ' — ' + r.person) : '',
           award ? el('span', { class: 'muted-cell' }, ' · ' + award) : ''),
         cols.map((m) => cell(r.byMonth[m])),
-        el('td', { class: r.total < -0.005 ? 'neg' : '' }, fmt$(r.total))));
+        el('td', { class: r.total < -0.005 ? 'neg' : '' }, money(r.total))));
     }
     grid.append(el('tr', { class: 'total-row' },
       el('td', {}, 'Total'),
       cols.map((m) => {
         const v = rowList.reduce((a, r) => a + (r.byMonth[m] || 0), 0);
         return el('td', { class: v < -0.005 ? 'neg' : '' },
-          rowList.some((r) => r.byMonth[m] !== undefined) ? fmt$(v) : '');
+          rowList.some((r) => r.byMonth[m] !== undefined) ? money(v) : '');
       }),
-      el('td', {}, fmt$(total))));
+      el('td', {}, money(total))));
     out.append(el('div', { class: 'spark-title', style: 'margin-top:10px' },
       'What landed each month — a blank cell means nothing posted'));
     out.append(el('div', { class: 'charges-wrap' }, grid));

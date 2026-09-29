@@ -42,7 +42,9 @@
   <section id="people-section" class="collapsible" data-key="people">
     <h2><span class="chev">▾</span> People</h2>
     <div class="sec-body">
-      <p class="hint">Seeded by past payroll. Edits will change projections only. Fees spread out over the year in projection.</p>
+      <p class="hint">Seeded by past payroll. Edits will change projections only. Fees spread out over the year in projection.
+        Split a person across grants with <b>+ split</b> (payroll splits can be edited into a what-if and reset).
+        Amount boxes take pasted figures like <code>$12,500</code> and quick math like <code>5200/2</code>; a box turns red when it can't read what's in it.</p>
       <div id="people"></div>
       <button id="add-person" class="btn">+ Add person</button>
     </div>
@@ -85,6 +87,12 @@
     external requests of its own — only the download links you click go anywhere, and they go
     to the reporting system. Data is read from the <code>data/</code> folder; scenarios save to
     <code>data/config.json</code>.
+    <div class="foot-links">
+      <a href="https://github.com/trholmes/UTKGrantDashboard" target="_blank" rel="noopener">Source on GitHub</a>
+      ·
+      <a href="https://github.com/trholmes/UTKGrantDashboard/issues" target="_blank" rel="noopener">Report a bug or suggest a feature</a>
+      — like the download links above, these go nowhere until you click them.
+    </div>
   </footer>
 </main>
 

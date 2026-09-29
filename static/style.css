@@ -123,6 +123,7 @@ h3 { font-size: 14px; margin: 0; }
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 9px; padding: 8px 12px;
 }
+.grant-filter-all { margin-left: auto; align-self: center; }
 tr.filtered-out { opacity: 0.45; }
 .check { color: var(--ink-2); font-size: 12.5px; user-select: none; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 14px; }
@@ -191,7 +192,7 @@ table.people { min-width: 960px; }
 table.people th, table.people td { padding: 4px 8px; white-space: nowrap; }
 table.people input { padding: 2px 5px; font-size: 12.5px; }
 table.people td.name-cell input { width: 88px; }
-table.people input[type="number"] { width: 68px; text-align: right; }
+table.people input.amount { width: 68px; text-align: right; }
 table.people input.newpay { width: 86px; }
 input.month-in { width: 80px; }
 input::placeholder { color: var(--muted); opacity: 1; }
@@ -199,7 +200,14 @@ td.paychange { white-space: nowrap; font-size: 12px; color: var(--muted); }
 td.name-cell { white-space: nowrap; }
 td.support-cell { max-width: 215px; overflow: hidden; text-overflow: ellipsis; }
 .btn-x { padding: 2px 8px; }
-td.support-edit select { max-width: 190px; font-size: 12px; }
+td.support-edit select { max-width: 170px; font-size: 12px; }
+td.support-edit { white-space: normal; }
+.split-row { display: flex; gap: 4px; align-items: center; margin: 2px 0; font-size: 12px; color: var(--muted); }
+.split-row .support-cell { display: inline-block; }
+.split-actions { margin-top: 3px; }
+table.people input.pct-in { width: 46px; }
+.split-total { color: var(--ink-2); }
+.split-total.warn { color: var(--critical); font-weight: 600; }
 .esc-row { color: var(--ink-2); font-size: 12.5px; margin-top: 8px; }
 input.esc-in { width: 52px; text-align: right; }
 input, select {
@@ -208,9 +216,11 @@ input, select {
   border-radius: 6px; padding: 3px 7px;
 }
 /* no spinner arrows on number fields — they're all type-in values */
-input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
-input[type="number"]::-webkit-inner-spin-button,
-input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input.amount { text-align: right; font-variant-numeric: tabular-nums; }
+input.amount.invalid {
+  border-color: var(--critical); color: var(--critical);
+  background: color-mix(in srgb, var(--critical) 10%, var(--surface));
+}
 .badge { font-size: 10.5px; color: var(--muted); border: 1px solid var(--grid); border-radius: 99px; padding: 1px 7px; }
 #add-person { margin-top: 10px; }
 
@@ -333,3 +343,5 @@ input.url-box { width: 100%; font-size: 11.5px; color: var(--ink-2); }
 
 .foot { margin-top: 44px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--grid); padding-top: 12px; }
 .foot code { font-size: 11.5px; }
+.foot-links { margin-top: 8px; }
+.foot-links a { color: var(--ink-2); }

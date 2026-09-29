@@ -21,9 +21,11 @@ already pull from the university reporting system, and gives you:
 * **Hiring & departure planning in the People table** — people are seeded
   automatically from the payroll lines in your detail export, with their
   real salaries, fringe rates, and support splits. Add a person and pick
-  their grant to model a hire; set an expected end date for a graduation,
-  or a scheduled pay change — every edit flows straight into the
-  projections (salary + fringe + fees + the F&A each award charges).
+  their grant to model a hire, split anyone across grants with **+ split**
+  (a payroll split can be edited into a what-if — move a student to
+  another award, or 50/50 them — and reset); set an expected end date for
+  a graduation, or a scheduled pay change — every edit flows straight into
+  the projections (salary + fringe + fees + the F&A each award charges).
 
 ![The dashboard, showing fictional demo data](docs/screenshot.png)
 
@@ -64,11 +66,42 @@ This is the part to check before trusting it with financial data:
    python3 dashboard.py
    ```
 
-   or double-click `Start Dashboard.command`. Your browser opens to
-   `http://127.0.0.1:8787`.
+   or double-click `Start Dashboard.command` (Mac) / `Start Dashboard.bat`
+   (Windows). Your browser opens to `http://127.0.0.1:8787`.
 
 4. When you have fresh exports, drop them in `data/` and click
    **Reload data** in the page header.
+
+### Windows, without a terminal
+
+For a business office on Windows machines, this is the whole setup:
+
+1. **Install Python 3** once, from
+   [python.org/downloads/windows](https://www.python.org/downloads/windows/).
+   On the installer's first screen tick **Add python.exe to PATH**, then
+   *Install Now*. (Nothing else gets installed, ever — the dashboard uses
+   only Python's standard library.)
+2. **Download this repo** with the green **Code ▾ → Download ZIP** button
+   on GitHub, and extract the ZIP somewhere handy (Desktop, Documents).
+   Extract it — don't run from inside the ZIP window.
+3. Put the CSV exports in the `data` folder inside it.
+4. **Double-click `Start Dashboard.bat`.** A small black window stays
+   open while the dashboard runs, and your browser opens to the page.
+   Close that window (or press Ctrl-C in it) to stop.
+
+Notes:
+
+* The first time, Windows may ask whether to run a file downloaded from
+  the internet; it is a plain batch file (open it in Notepad to read the
+  dozen lines), so choose *Run*, or *More info → Run anyway*.
+* If Python isn't installed the window says so and opens the download
+  page for you.
+* The *Get fresh data* section works the same way as on a Mac: the
+  dashboard looks in your Downloads folder for fresh exports (it finds
+  the folder even when OneDrive or a policy has moved it) and copies them
+  into `data` on a click.
+* To get updates later, download the ZIP again and copy your `data`
+  folder into the new one.
 
 ## Getting the data
 
@@ -178,12 +211,20 @@ Notes:
   and fees/tuition at 2%/yr — rates editable under the People table. A
   scheduled pay change is taken at face value for its month and escalates
   from there.
+* A person's cost is charged to awards by their **support split**: payroll's
+  latest month by default, or whatever you enter in the People table. Shares
+  below 100% in total mean the rest of their salary comes from elsewhere
+  (a half-time appointment, a departmental TA line); over 100% is flagged.
 * You can layer in things the reporting system doesn't know yet, and they
   feed the portfolio summary's funded-through projection: **expected new
   funding** per award (on its card, with the expected new end date —
   existing balance carries to the new end), an **expected end date** per
   person (graduation / rotating off your funding), and a scheduled **pay
   change** per person ("from month X, salary becomes $Y").
+* Amount boxes accept what you paste (`$12,500`, `12,500.50`) and quick
+  math (`5200/2` to put a student on a grant at 50%, `2600*1.03`). A box
+  turns red when it can't read its contents, and the stored value is left
+  alone until it can.
 * Scenario edits (people, assignments, expectations, overrides) save to
   `data/config.json` — local and git-ignored, like everything else in
   `data/`.

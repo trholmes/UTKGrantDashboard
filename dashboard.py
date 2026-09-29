@@ -19,7 +19,8 @@ Security model (short version, verifiable by reading this file):
 
 No dependencies beyond the Python 3 standard library (Python 3.9+).
 
-Usage:
+Usage (or double-click "Start Dashboard.command" on a Mac, "Start
+Dashboard.bat" on Windows):
     python3 dashboard.py                 # serve on http://127.0.0.1:8787
     python3 dashboard.py --port 9000
     python3 dashboard.py --data /path/to/exports
@@ -33,6 +34,7 @@ import csv
 import json
 import re
 import shutil
+import sys
 import webbrowser
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -44,7 +46,28 @@ import spn_reports
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 DEFAULT_DATA_DIR = BASE_DIR / "data"
-DEFAULT_INBOX_DIR = Path.home() / "Downloads"
+
+
+def default_inbox_dir():
+    """Where the browser drops downloads: ~/Downloads, except on Windows,
+    where the folder can be relocated (OneDrive, a second drive) and the
+    registry knows where it went."""
+    if sys.platform == "win32":
+        try:
+            import ntpath
+            import winreg
+            key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+                raw, _ = winreg.QueryValueEx(k, "{374DE290-123F-4565-9164-39C4925E467B}")
+            found = Path(ntpath.expandvars(raw))  # %USERPROFILE%\... style
+            if found.is_dir():
+                return found
+        except OSError:
+            pass
+    return Path.home() / "Downloads"
+
+
+DEFAULT_INBOX_DIR = default_inbox_dir()
 
 MAX_CONFIG_BYTES = 2_000_000  # sanity cap on saved-config uploads
 MAX_INBOX_FILES = 25          # newest N candidate exports shown per scan
