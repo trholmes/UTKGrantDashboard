@@ -113,7 +113,11 @@ Notes:
 ## Getting the data
 
 Two reports feed the dashboard. Any filename ending in `.csv` works — the
-tool identifies each file by its columns, so don't worry about renaming.
+tool identifies each file by its header row, so don't worry about renaming
+(a title row above the header, UTF-16, or tabs instead of commas are fine
+too). A file in `data/` or in Downloads that is *not* one of the two
+exports is never ignored quietly: the page names it and says why — an
+Excel workbook, the Award Summary tab, an unrelated CSV.
 
 **The short version:** open **Get fresh data** in the dashboard header. It
 builds a link that downloads the detail report for your projects in one
@@ -129,9 +133,14 @@ projections to anchor to.
 
 1. Open the [PI Dashboard](https://oaxfdiprod-idabxacptyfb-ia.analytics.ocp.oraclecloud.com/ui/dv/?pageid=visualAnalyzer&reportmode=full&reportpath=%2F%40Catalog%2Fshared%2FUT%2FFIN%2FPI%2FPI%20Dashboard)
    in Oracle Analytics.
-2. Navigate to **Project Summary**.
+2. Navigate to the **Project Summary** tab — not *Award Summary*. The
+   dashboard works per project (the `SPN…` numbers, which also key the
+   detail report); an Award Summary export starts with *Award Number* and
+   rolls several projects into one row, so it is named on the page as
+   the wrong tab rather than read.
 3. Enter your name in **Project PI / Manager**.
-4. Export the Project Summary table as **CSV** and drop it in `data/`.
+4. Export the Project Summary table as **CSV** (Export → Data → CSV, not
+   the Excel workbook) and drop it in `data/`.
 
 ### 2. Expenditure detail report — strongly recommended
 

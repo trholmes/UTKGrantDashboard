@@ -143,28 +143,69 @@ def month_add(m, n):
 
 def classify_csv(path):
     """Return 'pi_dashboard', 'detail', or None based on the header row."""
-    try:
-        with open(path, encoding="utf-8-sig", newline="") as f:
-            header = f.readline()
-    except OSError:
-        return None
+    info = spn_reports.find_header(path)
+    return _kind_of_header(info["header"], Path(path).name) if info else None
+
+
+def _kind_of_header(header, filename):
     if "P_PROJECT" in header and "L_EXP_COST" in header:
         return "detail"
     if "Project Number" in header and "Expenditure Category" in header:
         return "pi_dashboard"
     # Expenditure detail exports keep the RPT filename prefix even when the
     # report number/name changes; accept any RPT* csv that looks the part.
-    if path.name.upper().startswith("RPT") and any(
+    if filename.upper().startswith("RPT") and any(
             marker in header for marker in ("PROJ_NUMBER", "L_EXP", "NL_EXP")):
         return "detail"
     return None
 
 
+# file types someone might reasonably drop in data/ or download by mistake —
+# these get named, with a reason, instead of being ignored silently
+SPREADSHEET_SUFFIXES = (".csv", ".xlsx", ".xls", ".txt", ".tsv")
+EXPECTED_HEADERS = ("a PI Dashboard export starts with \"Project Number, Project "
+                    "Name, Project PI / Manager…\"; a detail export with "
+                    "\"P_PROJECT, PROJ_NUMBER…\"")
+
+
+def why_unrecognized(path):
+    """One sentence on why a file isn't one of the two exports."""
+    path = Path(path)
+    if path.suffix.lower() in (".xlsx", ".xls"):
+        return ("an Excel workbook, not a CSV — export the table again as CSV "
+                "(Export → Data → CSV)")
+    info = spn_reports.find_header(path)
+    if info and "Award Number" in info["header"]:
+        return ("the PI Dashboard's Award Summary (one row per award) — the "
+                "dashboard needs the Project Summary tab, whose export starts "
+                "with \"Project Number\" (one row per project)")
+    if info:
+        return (f"its header row ({info['header'].strip()[:90]}…) names neither "
+                f"report's columns — {EXPECTED_HEADERS}")
+    try:
+        with open(path, encoding=spn_reports.export_encoding(path), newline="",
+                  errors="replace") as f:
+            first = f.readline().strip()
+    except OSError:
+        return "it could not be read"
+    if not first:
+        return "the file is empty"
+    return (f"nothing near the top looks like a header row (first line: "
+            f"{first[:80]}…) — {EXPECTED_HEADERS}")
+
+
+def data_files(data_dir):
+    """Spreadsheet-ish files in a data folder, exports or not, sorted."""
+    return sorted(p for p in Path(data_dir).iterdir()
+                  if p.is_file() and p.suffix.lower() in SPREADSHEET_SUFFIXES
+                  and not p.name.startswith("."))
+
+
 def parse_pi_dashboard(path):
     """One row per (project, expenditure category) with budget/actuals."""
     rows = []
-    with open(path, encoding="utf-8-sig", newline="") as f:
-        for r in csv.DictReader(f):
+    with spn_reports.export_reader(path) as reader:
+        for r in reader:
             proj = (r.get("Project Number") or "").strip()
             if not proj:
                 continue
@@ -225,8 +266,9 @@ def parse_detail(path, labor, nonlabor, meta):
     de-duplicate each side on its own key. Results accumulate into the
     passed-in dicts so several export files merge cleanly.
     """
-    with _open_counting(path) as f:
-        reader = csv.DictReader(f)
+    info = spn_reports.find_header(path) or {"encoding": "utf-8-sig", "line": 0, "delimiter": ","}
+    with _open_counting(path, info["encoding"]) as f:
+        reader = spn_reports.header_reader(f, info)
         l_desc_cols = _desc_columns(reader.fieldnames, "L_")
         nl_desc_cols = _desc_columns(reader.fieldnames, "NL_")
         nl_vend_cols = _cols_with(reader.fieldnames, "NL_", ("VEND",))
@@ -613,11 +655,11 @@ class _CountingReader(io.RawIOBase):
         super().close()
 
 
-def _open_counting(path):
+def _open_counting(path, encoding="utf-8-sig"):
     """open(path) for CSV reading, with progress reporting on the way in."""
     raw = open(path, "rb", buffering=0)
     return io.TextIOWrapper(io.BufferedReader(_CountingReader(raw), 1 << 16),
-                            encoding="utf-8-sig", newline="")
+                            encoding=encoding, newline="")
 
 
 _build_lock = threading.Lock()
@@ -630,7 +672,7 @@ KEEP_DIRS = 3         # parsed data kept in memory for this many folders
 def _cache_key(data_dir):
     return tuple(sorted(
         (str(p), p.stat().st_mtime, p.stat().st_size)
-        for p in Path(data_dir).glob("*.csv")
+        for p in data_files(data_dir)
     )) + (date.today().isoformat(),)
 
 
@@ -714,7 +756,8 @@ def _build_payload_uncached(data_dir, root=None):
     dash_files = []           # (mtime, rows)
     labor, nonlabor, meta = {}, {}, {}
 
-    files = [(p, p.stat(), classify_csv(p)) for p in sorted(Path(data_dir).glob("*.csv"))]
+    files = [(p, p.stat(), classify_csv(p) if p.suffix.lower() == ".csv" else None)
+             for p in data_files(data_dir)]
     # what actually has to be read: detail exports not parsed yet (or changed)
     plan = [(p.name, st.st_size) for p, st, kind in files
             if kind == "detail" and (str(p) not in _detail_cache
@@ -726,6 +769,8 @@ def _build_payload_uncached(data_dir, root=None):
                 "name": path.name,
                 "type": kind or "unrecognized",
                 "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                # a file that is there but not read: say why, in the page
+                "reason": None if kind else why_unrecognized(path),
             })
             if kind == "pi_dashboard":
                 dash_files.append((stat.st_mtime, parse_pi_dashboard(path)))
@@ -1050,8 +1095,7 @@ def sniff_csv(path, kind=None):
     kind = kind or classify_csv(path)
     pis, projects = set(), set()
     try:
-        with open(path, encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
+        with spn_reports.export_reader(path) as reader:
             headers = reader.fieldnames or []
             pi_col = next((h for h in headers if "PI" in h and "Manager" in h), None)
             proj_col = ("Project Number" if kind == "pi_dashboard" else "PROJ_NUMBER")
@@ -1185,6 +1229,42 @@ def scan_inbox(inbox_dir, data_dir, root=None):
         if len(found) >= MAX_INBOX_FILES:
             break
     return found
+
+
+RECENT_SECONDS = 2 * 24 * 3600   # how far back the inbox looks for near-misses
+MAX_UNRECOGNIZED = 5
+
+
+def scan_inbox_unrecognized(inbox_dir):
+    """Recent spreadsheet-ish downloads that are *not* an export, with the
+    reason — so "nothing to import" never hides the file someone just
+    saved (an .xlsx, the Award Summary tab, a wrong report)."""
+    if inbox_dir is None:
+        return []
+    try:
+        candidates = [p for p in Path(inbox_dir).iterdir()
+                      if p.suffix.lower() in SPREADSHEET_SUFFIXES and not p.name.startswith(".")]
+    except OSError:
+        return []
+    now = datetime.now().timestamp()
+    out = []
+    for path in sorted(candidates, key=lambda p: -p.stat().st_mtime if p.exists() else 0):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if not path.is_file() or now - stat.st_mtime > RECENT_SECONDS:
+            continue
+        if path.suffix.lower() == ".csv" and classify_csv(path):
+            continue
+        out.append({
+            "name": path.name,
+            "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            "reason": why_unrecognized(path),
+        })
+        if len(out) >= MAX_UNRECOGNIZED:
+            break
+    return out
 
 
 def import_from_inbox(names, inbox_dir, data_dir):
@@ -1398,6 +1478,7 @@ def make_handler(root_dir, inbox_dir=None):
                     self._send(200, json.dumps({
                         "dir": str(inbox_dir) if inbox_dir else None,
                         "files": scan_inbox(inbox_dir, self._data_dir(query), root_dir),
+                        "unrecognized": scan_inbox_unrecognized(inbox_dir),
                     }))
                 except Exception as exc:
                     self._send(400, json.dumps({"error": str(exc)}))

@@ -106,6 +106,15 @@ h3 { font-size: 14px; margin: 0; }
   background: var(--surface); border: 1px solid var(--critical);
   border-radius: 10px; padding: 12px 16px; margin-top: 18px;
 }
+.notice {
+  background: var(--surface); border: 1px solid var(--warning);
+  border-radius: 10px; padding: 10px 16px; margin-top: 18px; font-size: 13px;
+}
+.notice-head { font-weight: 600; margin-bottom: 4px; }
+.notice-row { margin: 3px 0; color: var(--ink-2); }
+.notice-row b { color: var(--ink); }
+.inbox-row.unrecognized .inbox-name { color: var(--ink-2); }
+.inbox-reason { color: var(--ink-2); flex-basis: 100%; }
 
 /* ---- flags ---- */
 #flags { display: flex; flex-direction: column; gap: 6px; }

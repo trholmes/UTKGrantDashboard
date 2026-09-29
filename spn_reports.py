@@ -25,6 +25,7 @@ CSV. Do not "improve" this into a fetch().
 """
 
 import argparse
+import codecs
 import csv
 import html
 import json
@@ -32,6 +33,7 @@ import re
 import sys
 import webbrowser
 from datetime import date, datetime
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
 
@@ -66,6 +68,72 @@ SOURCE_FILE = "report_source.json"
 
 PROJECT_RE = re.compile(r"SPN\d+", re.IGNORECASE)
 BARE_NUMBER_RE = re.compile(r"\d{4,}")
+
+
+# ---------------------------------------------------------------------------
+# reading an export: encoding, header row, delimiter
+# ---------------------------------------------------------------------------
+# The reporting tools are not consistent about the shape of a CSV: a BOM or
+# not, UTF-8 or UTF-16, a title row or two above the header, commas or tabs.
+# Everything that reads an export goes through here so all of that is
+# handled in one place.
+
+# a line is the header row when it names one of these columns
+HEADER_MARKERS = ("Project Number", "PROJ_NUMBER", "P_PROJECT", "L_EXP_COST",
+                  "Expenditure Category", "Award Number")
+HEADER_SCAN_LINES = 20   # title rows tolerated above the header
+
+
+def export_encoding(path):
+    with open(path, "rb") as f:
+        head = f.read(4)
+    if head.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return "utf-16"
+    return "utf-8-sig"
+
+
+def _delimiter(header):
+    counts = {d: header.count(d) for d in (",", "\t", ";", "|")}
+    best = max(counts, key=counts.get)
+    return best if counts[best] else ","
+
+
+def find_header(path):
+    """Where an export's header row is: {"encoding", "line", "header",
+    "delimiter"}, or None when no line near the top names a known column."""
+    try:
+        encoding = export_encoding(path)
+        with open(path, encoding=encoding, newline="", errors="replace") as f:
+            for i in range(HEADER_SCAN_LINES):
+                line = f.readline()
+                if not line:
+                    return None
+                if any(m in line for m in HEADER_MARKERS):
+                    return {"encoding": encoding, "line": i, "header": line,
+                            "delimiter": _delimiter(line)}
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def header_reader(f, info):
+    """A DictReader on an open export, skipping title rows and tidying
+    header names (a trailing space in a column name is not a new column)."""
+    for _ in range(info["line"]):
+        f.readline()
+    reader = csv.DictReader(f, delimiter=info["delimiter"])
+    reader.fieldnames = [(h or "").strip() for h in (reader.fieldnames or [])]
+    return reader
+
+
+@contextmanager
+def export_reader(path):
+    """with export_reader(path) as rows: ... — a DictReader over an export,
+    whatever its encoding, delimiter and title rows."""
+    info = find_header(path) or {"encoding": export_encoding(path), "line": 0,
+                                 "delimiter": ","}   # no known column: line 1 it is
+    with open(path, encoding=info["encoding"], newline="") as f:
+        yield header_reader(f, info)
 
 
 def read_source_file(data_dir):
@@ -313,8 +381,7 @@ def projects_from_csv(path, column="Project Number"):
     SPN pattern, which survives header renames and totals rows.
     """
     found = []
-    with open(path, encoding="utf-8-sig", newline="") as f:  # exports carry a BOM
-        reader = csv.DictReader(f)
+    with export_reader(path) as reader:
         use_column = column in (reader.fieldnames or [])
         for row in reader:
             cells = [row.get(column)] if use_column else row.values()
@@ -333,8 +400,7 @@ def scan_data_dir(data_dir):
     seen = set()
     for path in sorted(Path(data_dir).glob("*.csv")):
         try:
-            with open(path, encoding="utf-8-sig", newline="") as f:
-                reader = csv.DictReader(f)
+            with export_reader(path) as reader:
                 headers = reader.fieldnames or []
                 if "Project Number" not in headers:
                     continue
@@ -347,7 +413,7 @@ def scan_data_dir(data_dir):
                         starts.append(parse_date(row.get("Project Start Date")))
                     except ValueError:
                         pass
-        except OSError:
+        except (OSError, ValueError, csv.Error):
             continue
     return projects, min(starts).isoformat() if starts else None
 

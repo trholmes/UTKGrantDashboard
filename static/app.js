@@ -339,12 +339,36 @@ function renderAll() {
 
 function renderStatus() {
   const recognized = DATA.files.filter((f) => f.type !== 'unrecognized');
+  const skipped = DATA.files.filter((f) => f.type === 'unrecognized' && f.reason);
   const parts = recognized.length
     ? `${recognized.length} file${recognized.length === 1 ? '' : 's'} · ` +
       recognized.map((f) => f.name).join(', ')
-    : `No CSV exports in ${folderLabel()} yet`;
+    : `No exports read from ${folderLabel()} yet`;
   const where = PI ? `${folderLabel()} · ` : '';
-  $('#data-status').textContent = `As of ${DATA.generated} · ${where}${parts}`;
+  const note = skipped.length
+    ? ` · ${skipped.length} file${skipped.length === 1 ? '' : 's'} not recognized (see below)` : '';
+  $('#data-status').textContent = `As of ${DATA.generated} · ${where}${parts}${note}`;
+
+  // files that are there but not read — say so, and why, rather than
+  // letting "reload did nothing" be the only clue
+  const panel = $('#notice-panel');
+  panel.replaceChildren();
+  const prof = DATA.profile;
+  if (skipped.length) {
+    panel.append(el('div', { class: 'notice-head' },
+      `In ${folderLabel()} but not recognized as an export:`));
+    for (const f of skipped) {
+      panel.append(el('div', { class: 'notice-row' },
+        el('b', {}, f.name), ' — ' + f.reason));
+    }
+  }
+  if (PI && prof && prof.root.files) {
+    panel.append(el('div', { class: 'notice-row' },
+      `This page reads ${folderLabel()}. There ${prof.root.files === 1 ? 'is' : 'are'} `
+      + `${prof.root.files} export${prof.root.files === 1 ? '' : 's'} in ${prof.root.name}/ itself — `
+      + `move them into ${folderLabel()}, or pick "${prof.root.name}/ itself" in the PI menu.`));
+  }
+  panel.hidden = !panel.childElementCount;
 }
 
 /* ---------- PI folders ---------- */
@@ -1995,9 +2019,9 @@ function renderGetData() {
     el('div', { class: 'step-head' }, el('span', { class: 'step-num' }, '1'),
       'PI Dashboard export — budgets and balances'),
     el('div', { class: 'hint' },
-      `Project Summary → ${PI ? 'the PI\'s name (' + PI + ')' : 'your name'} in `
-      + 'Project PI / Manager → export the table as CSV. This one needs a few '
-      + 'clicks in the reporting tool; the link opens it on the right page.'));
+      `Project Summary tab (not Award Summary) → ${PI ? 'the PI\'s name (' + PI + ')' : 'your name'} in `
+      + 'Project PI / Manager → export the table as CSV (Export → Data → CSV). This one '
+      + 'needs a few clicks in the reporting tool; the link opens it on the right page.'));
   if (DATA.reportSource && DATA.reportSource.piDashboardUrl) {
     dash.append(el('a', {
       class: 'btn', href: DATA.reportSource.piDashboardUrl,
@@ -2280,7 +2304,8 @@ function renderInbox() {
   if (!pending.length) {
     box.append(el('div', { class: 'flag-empty' },
       files.length ? 'Everything there is already in ' + folderLabel() + '.'
-        : 'Nothing to import yet.'));
+        : (INBOX.unrecognized || []).length ? 'No export to import yet — but see below.'
+          : 'Nothing to import yet.'));
   }
   const manyFolders = DATA.profile && DATA.profile.profiles.length > 0;
   for (const f of pending) {
@@ -2316,6 +2341,15 @@ function renderInbox() {
         manyFolders ? 'Import into ' + folderLabel() : 'Import'));
     }
     box.append(row);
+  }
+  // recent downloads that are not an export: name them, with the reason,
+  // so "nothing to import" never hides the file someone just saved
+  for (const f of INBOX.unrecognized || []) {
+    box.append(el('div', { class: 'inbox-row unrecognized' },
+      el('span', { class: 'inbox-name' }, f.name),
+      el('span', { class: 'badge warn' }, 'not an export'),
+      el('span', { class: 'muted-cell' }, f.modified),
+      el('span', { class: 'inbox-reason' }, f.reason)));
   }
   const ready = pending.filter((f) => isReady(f) && !belongsElsewhere(f));
   const row = el('div', { class: 'getdata-row' });
