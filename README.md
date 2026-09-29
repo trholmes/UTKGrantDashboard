@@ -64,11 +64,42 @@ This is the part to check before trusting it with financial data:
    python3 dashboard.py
    ```
 
-   or double-click `Start Dashboard.command`. Your browser opens to
-   `http://127.0.0.1:8787`.
+   or double-click `Start Dashboard.command` (Mac) / `Start Dashboard.bat`
+   (Windows). Your browser opens to `http://127.0.0.1:8787`.
 
 4. When you have fresh exports, drop them in `data/` and click
    **Reload data** in the page header.
+
+### Windows, without a terminal
+
+For a business office on Windows machines, this is the whole setup:
+
+1. **Install Python 3** once, from
+   [python.org/downloads/windows](https://www.python.org/downloads/windows/).
+   On the installer's first screen tick **Add python.exe to PATH**, then
+   *Install Now*. (Nothing else gets installed, ever — the dashboard uses
+   only Python's standard library.)
+2. **Download this repo** with the green **Code ▾ → Download ZIP** button
+   on GitHub, and extract the ZIP somewhere handy (Desktop, Documents).
+   Extract it — don't run from inside the ZIP window.
+3. Put the CSV exports in the `data` folder inside it.
+4. **Double-click `Start Dashboard.bat`.** A small black window stays
+   open while the dashboard runs, and your browser opens to the page.
+   Close that window (or press Ctrl-C in it) to stop.
+
+Notes:
+
+* The first time, Windows may ask whether to run a file downloaded from
+  the internet; it is a plain batch file (open it in Notepad to read the
+  dozen lines), so choose *Run*, or *More info → Run anyway*.
+* If Python isn't installed the window says so and opens the download
+  page for you.
+* The *Get fresh data* section works the same way as on a Mac: the
+  dashboard looks in your Downloads folder for fresh exports (it finds
+  the folder even when OneDrive or a policy has moved it) and copies them
+  into `data` on a click.
+* To get updates later, download the ZIP again and copy your `data`
+  folder into the new one.
 
 ## Getting the data
 
