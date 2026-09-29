@@ -68,18 +68,30 @@ PROJECT_RE = re.compile(r"SPN\d+", re.IGNORECASE)
 BARE_NUMBER_RE = re.compile(r"\d{4,}")
 
 
+def read_source_file(data_dir):
+    """The usable overrides in data_dir/report_source.json, or {}."""
+    try:
+        with open(Path(data_dir) / SOURCE_FILE, encoding="utf-8") as f:
+            loaded = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {k: v for k, v in loaded.items()
+            if k in DEFAULT_SOURCE and isinstance(v, str) and v.strip()}
+
+
 def load_source(data_dir=None, **overrides):
-    """DEFAULT_SOURCE, plus data/report_source.json, plus explicit overrides."""
+    """DEFAULT_SOURCE, plus data/report_source.json, plus explicit overrides.
+
+    data_dir may be a list of folders, applied in order — the data folder
+    first, then a PI's own folder inside it, so the latter's file wins.
+    """
     src = dict(DEFAULT_SOURCE)
-    if data_dir:
-        try:
-            with open(Path(data_dir) / SOURCE_FILE, encoding="utf-8") as f:
-                loaded = json.load(f)
-            if isinstance(loaded, dict):
-                src.update({k: v for k, v in loaded.items()
-                            if k in DEFAULT_SOURCE and isinstance(v, str) and v.strip()})
-        except (OSError, json.JSONDecodeError):
-            pass
+    dirs = data_dir if isinstance(data_dir, (list, tuple)) else [data_dir]
+    for d in dirs:
+        if d:
+            src.update(read_source_file(d))
     src.update({k: v for k, v in overrides.items() if v})
     return src
 

@@ -83,6 +83,16 @@ h3 { font-size: 14px; margin: 0; }
 }
 .topbar-actions { display: flex; align-items: center; gap: 10px; }
 .save-indicator { color: var(--good-text); font-size: 12px; }
+.pi-name {
+  font-size: 13px; font-weight: 500; color: var(--ink-2); vertical-align: 1px;
+  border: 1px solid var(--grid); border-radius: 99px; padding: 1px 9px; margin-left: 6px;
+}
+.pi-switch { font-size: 13px; color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+.pi-switch select {
+  font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--baseline); border-radius: 7px; padding: 4px 8px; max-width: 24ch;
+}
+.btn:disabled { opacity: 0.6; cursor: progress; }
 
 .btn {
   font: inherit; font-size: 13px; color: var(--ink);
@@ -332,6 +342,8 @@ input.url-box { width: 100%; font-size: 11.5px; color: var(--ink-2); }
 .inbox-row.fresh .inbox-name { font-weight: 650; color: var(--good-text); }
 .inbox-name { font-variant-numeric: tabular-nums; }
 .imported-note { color: var(--good-text); margin-bottom: 6px; }
+.badge.warn { border-color: var(--warning); color: var(--ink-2); }
+.pi-folders { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
 .tooltip {
   position: fixed; z-index: 20; pointer-events: none;
