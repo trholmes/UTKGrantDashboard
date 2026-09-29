@@ -88,6 +88,7 @@ h3 { font-size: 14px; margin: 0; }
   border: 1px solid var(--grid); border-radius: 99px; padding: 1px 9px; margin-left: 6px;
 }
 .pi-switch { font-size: 13px; color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+.pi-switch[hidden], .pi-name[hidden] { display: none; }
 .pi-switch select {
   font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
   border: 1px solid var(--baseline); border-radius: 7px; padding: 4px 8px; max-width: 24ch;

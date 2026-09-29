@@ -224,14 +224,10 @@ dashboard of its own: that PI's exports, their People table, their
 scenarios and overrides (`config.json`), all separate.
 
 * **Creating a folder:** open **Get fresh data** and click **+ New PI
-  folder**. That makes the folder and lists it in `data/pi_folders.json`;
-  only folders listed there count, so a stray subfolder in `data/` (old
-  exports, a backup) never changes the page. A folder you made by hand
-  joins the list when you enter its name in **+ New PI folder**. Once a
-  PI folder exists the header shows a **PI** menu listing every folder;
-  the menu switches the whole page, including *Get fresh data*, to that
-  PI. The page's address carries the choice (`?pi=Holmes`), so a browser
-  tab per PI works too.
+  folder** (or make the folder in Finder/Explorer). The header then shows a
+  **PI** menu listing every folder; the menu switches the whole page,
+  including *Get fresh data*, to that PI. The page's address carries the
+  choice (`?pi=Holmes`), so a browser tab per PI works too.
 * **Getting a PI's exports in:** switch to their folder first. Step 1
   opens the PI Dashboard where you enter *that* PI's name and imports
   the export into that folder; step 2's download link covers the

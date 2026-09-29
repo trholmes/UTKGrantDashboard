@@ -70,17 +70,11 @@ class Folders(unittest.TestCase):
         self.assertEqual(dashboard.profile_dir(self.root, None), self.root)
         self.assertEqual(dashboard.profile_dir(self.root, ""), self.root)
 
-    def test_a_name_is_a_registered_subfolder_that_must_exist(self):
-        dashboard.create_profile(self.root, "Holmes")
+    def test_a_name_is_a_subfolder_that_must_exist(self):
+        (self.root / "Holmes").mkdir()
         self.assertEqual(dashboard.profile_dir(self.root, "Holmes"), self.root / "Holmes")
         with self.assertRaises(dashboard.NoSuchProfile):
             dashboard.profile_dir(self.root, "Lee")
-        # a folder made by hand is not a PI folder until it is registered
-        (self.root / "Lee").mkdir()
-        with self.assertRaises(dashboard.NoSuchProfile):
-            dashboard.profile_dir(self.root, "Lee")
-        dashboard.create_profile(self.root, "Lee")
-        self.assertEqual(dashboard.profile_dir(self.root, "Lee"), self.root / "Lee")
 
     def test_a_name_can_never_leave_the_data_folder(self):
         outside = self.root.parent
@@ -92,19 +86,13 @@ class Folders(unittest.TestCase):
         self.assertEqual(dashboard.create_profile(self.root, "  Doe,   Jane "), "Doe, Jane")
         self.assertTrue((self.root / "Doe, Jane").is_dir())
         self.assertEqual(dashboard.create_profile(self.root, "Doe, Jane"), "Doe, Jane")
-        self.assertEqual(dashboard.registered_profiles(self.root), ["Doe, Jane"])
         with self.assertRaises(ValueError):
             dashboard.create_profile(self.root, "../escape")
         self.assertFalse((self.root.parent / "escape").exists())
 
-    def test_listing_is_the_registered_folders_only(self):
-        # a stray subfolder (old exports, a backup) must not turn a single
-        # PI's dashboard into the multi-PI layout
-        for name in ("old exports", "backup 2025", ".git"):
+    def test_listing_skips_hidden_and_odd_folders(self):
+        for name in ("Holmes", "Doe, Jane", ".git", "_scratch", "bad;name"):
             (self.root / name).mkdir()
-        self.assertEqual(dashboard.list_profiles(self.root), [])
-        dashboard.create_profile(self.root, "Holmes")
-        dashboard.create_profile(self.root, "Doe, Jane")
         (self.root / "Holmes" / "stray.txt").write_text("x")
         shutil.copy(FIXTURE, self.root / "Holmes" / "dash.csv")
         listed = dashboard.list_profiles(self.root)
@@ -112,15 +100,6 @@ class Folders(unittest.TestCase):
         by_name = {p["name"]: p for p in listed}
         self.assertEqual(by_name["Holmes"]["files"], 1)
         self.assertEqual(by_name["Doe, Jane"]["files"], 0)
-        # a registered folder that was deleted drops out of the menu
-        shutil.rmtree(self.root / "Doe, Jane")
-        self.assertEqual([p["name"] for p in dashboard.list_profiles(self.root)], ["Holmes"])
-
-    def test_a_broken_registry_is_an_empty_one(self):
-        (self.root / "pi_folders.json").write_text("{not json", encoding="utf-8")
-        self.assertEqual(dashboard.registered_profiles(self.root), [])
-        (self.root / "pi_folders.json").write_text('["ok", 3, "../x", "ok"]', encoding="utf-8")
-        self.assertEqual(dashboard.registered_profiles(self.root), ["ok"])
 
     def test_profile_info_names_the_current_folder(self):
         dashboard.create_profile(self.root, "Holmes")

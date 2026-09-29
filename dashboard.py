@@ -996,42 +996,9 @@ def _analyze(data_dir, root, today_iso, this_month, files_info, dash_files,
 # is a complete data folder of its own — exports, config.json, scenarios —
 # and the page switches between them with ?pi=<name>. Nothing is ever moved
 # between folders; imports land in whichever folder the page is showing.
-#
-# Only folders registered in data/pi_folders.json count — "+ New PI folder"
-# writes it — so a stray subfolder (an archive of old exports, say) never
-# turns a single PI's dashboard into the multi-PI layout.
-
-PROFILES_FILE = "pi_folders.json"
-
 
 class NoSuchProfile(ValueError):
     pass
-
-
-def registered_profiles(root):
-    """PI folder names from data/pi_folders.json, in the order written."""
-    try:
-        with open(Path(root) / PROFILES_FILE, encoding="utf-8") as f:
-            names = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(names, list):
-        return []
-    out = []
-    for name in names:
-        if isinstance(name, str) and profile_name_ok(name) and name not in out:
-            out.append(name)
-    return out
-
-
-def _register_profile(root, name):
-    names = registered_profiles(root)
-    if name not in names:
-        names.append(name)
-        tmp = Path(root) / (PROFILES_FILE + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(names, f, indent=2)
-        tmp.replace(Path(root) / PROFILES_FILE)
 
 
 def profile_name_ok(name):
@@ -1047,24 +1014,19 @@ def profile_dir(root, name):
     if not profile_name_ok(name):
         raise NoSuchProfile(f"not a usable PI folder name: {name!r}")
     d = root / name
-    if name not in registered_profiles(root) or not d.is_dir() \
-            or d.resolve().parent != root.resolve():
-        raise NoSuchProfile(f"there is no PI folder named {name!r} in {root} — "
-                            f"add it with \"+ New PI folder\"")
+    if not d.is_dir() or d.resolve().parent != root.resolve():
+        raise NoSuchProfile(f"there is no PI folder named {name!r} in {root}")
     return d
 
 
 def create_profile(root, name):
-    """Make data/<name>/ (a no-op if it exists), register it, and return
-    the clean name. Registering an existing folder is how one made by hand
-    in Finder/Explorer joins the PI menu."""
+    """Make data/<name>/ (a no-op if it exists) and return the clean name."""
     name = " ".join(str(name or "").split())
     if not profile_name_ok(name):
         raise ValueError("a PI folder name is letters, digits, spaces and "
                          "simple punctuation — e.g. \"Holmes\" or \"Doe, Jane\"")
     d = Path(root) / name
     d.mkdir(exist_ok=True)
-    _register_profile(root, name)
     return name
 
 
@@ -1079,12 +1041,15 @@ def _folder_summary(d):
 
 
 def list_profiles(root):
-    """The registered PI folders that exist, alphabetically."""
+    """The PI folders inside the data folder, alphabetically."""
     out = []
-    for name in sorted(registered_profiles(root), key=str.lower):
-        d = Path(root) / name
-        if d.is_dir():
-            out.append(dict(_folder_summary(d), name=name))
+    try:
+        children = sorted(Path(root).iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return out
+    for d in children:
+        if d.is_dir() and not d.name.startswith((".", "_")) and profile_name_ok(d.name):
+            out.append(dict(_folder_summary(d), name=d.name))
     return out
 
 
