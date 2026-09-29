@@ -5,6 +5,22 @@
 
 let DATA = null;   // payload from /api/data
 let CFG = null;    // { people:[], assignments:[], overrides:{} }
+// Which PI folder this page shows (?pi=Holmes → data/Holmes); '' is the data
+// folder itself. Every API call carries it, so a tab per PI just works.
+const PI = new URLSearchParams(location.search).get('pi') || '';
+function api(path, params, pi) {
+  const q = new URLSearchParams(params || {});
+  const folder = pi === undefined ? PI : pi;
+  if (folder) q.set('pi', folder);
+  const str = q.toString();
+  return path + (str ? '?' + str : '');
+}
+function folderLabel(pi) {
+  // 'data/Holmes' — how a folder is referred to in the page's prose
+  const root = (DATA && DATA.profile && DATA.profile.root.name) || 'data';
+  const name = pi === undefined ? PI : pi;
+  return root + '/' + (name ? name : '');
+}
 let saveTimer = null;
 let personColors = new Map();  // name -> color, assigned by the summary chart
 let cardModel = null;          // per-award projection model, built by renderSummary
@@ -182,19 +198,66 @@ function amountInput(opts) {
 
 /* ---------- data loading & config ---------- */
 
+let loading = false;
+
 async function load() {
+  // one reload at a time: a second click while a big detail export is being
+  // parsed would only queue up behind it on the server
+  if (loading) return;
+  loading = true;
+  const btn = $('#reload-btn');
+  btn.disabled = true;
+  btn.textContent = 'Reloading…';
+  const stopWatching = watchProgress();
   try {
-    const res = await fetch('/api/data');
+    const res = await fetch(api('/api/data'));
     const payload = await res.json();
     if (payload.error) throw new Error(payload.error);
     DATA = payload;
+    $('#error-panel').hidden = true;
     initConfig();
     renderAll();
   } catch (err) {
     const panel = $('#error-panel');
     panel.hidden = false;
     panel.replaceChildren(el('b', {}, 'Could not load data: '), String(err.message || err));
+    if (PI) {
+      panel.append(' ', el('a', { href: location.pathname }, 'Back to the data folder'));
+    }
+    $('#data-status').textContent = 'Not loaded';
+  } finally {
+    stopWatching();
+    loading = false;
+    btn.disabled = false;
+    btn.textContent = 'Reload data';
   }
+}
+
+function watchProgress() {
+  // While /api/data is in flight, ask the server what it is doing and say so
+  // in the header: which file it is reading and how far along it is. A
+  // reload with nothing new to parse returns before the first poll fires.
+  const status = $('#data-status');
+  const started = Date.now();
+  let stopped = false;
+  const tick = async () => {
+    if (stopped) return;
+    let p = null;
+    try { p = await (await fetch('/api/progress')).json(); } catch { /* server busy */ }
+    if (stopped) return;
+    if (p && p.active && p.stage === 'reading' && p.file) {
+      const pct = p.fileSize ? Math.min(100, Math.round(100 * p.fileBytes / p.fileSize)) : 0;
+      status.textContent = `Reading ${p.file} — ${pct}% of ${fmtBytes(p.fileSize)}`
+        + (p.fileCount > 1 ? ` (file ${p.fileIndex} of ${p.fileCount})` : '');
+    } else if (p && p.active) {
+      status.textContent = 'Reading exports… analyzing';
+    } else if (Date.now() - started > 1500) {
+      status.textContent = 'Reading the data folder…';
+    }
+  };
+  const timer = setInterval(tick, 700);
+  setTimeout(tick, 250);
+  return () => { stopped = true; clearInterval(timer); };
 }
 
 function initConfig() {
@@ -225,7 +288,7 @@ function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
-      await fetch('/api/config', { method: 'POST', body: JSON.stringify(CFG) });
+      await fetch(api('/api/config'), { method: 'POST', body: JSON.stringify(CFG) });
       const ind = $('#save-indicator');
       ind.hidden = false;
       setTimeout(() => { ind.hidden = true; }, 1500);
@@ -264,6 +327,7 @@ function setupSections() {
 
 function renderAll() {
   setupSections();
+  renderProfiles();
   renderStatus();
   renderFlags();
   renderSummary();
@@ -278,8 +342,65 @@ function renderStatus() {
   const parts = recognized.length
     ? `${recognized.length} file${recognized.length === 1 ? '' : 's'} · ` +
       recognized.map((f) => f.name).join(', ')
-    : 'No CSV exports found in the data/ folder yet';
-  $('#data-status').textContent = `As of ${DATA.generated} · ${parts}`;
+    : `No CSV exports in ${folderLabel()} yet`;
+  const where = PI ? `${folderLabel()} · ` : '';
+  $('#data-status').textContent = `As of ${DATA.generated} · ${where}${parts}`;
+}
+
+/* ---------- PI folders ---------- */
+
+function renderProfiles() {
+  // The switcher only appears once a PI folder exists; a PI with everything
+  // straight in data/ never sees it.
+  const prof = DATA.profile || { current: '', root: { name: 'data', files: 0 }, profiles: [] };
+  const wrap = $('#pi-switch');
+  const sel = $('#pi-select');
+  const chip = $('#pi-name');
+  const show = prof.profiles.length > 0 || !!prof.current;
+  document.title = (prof.current ? prof.current + ' · ' : '') + 'Grant Dashboard';
+  chip.hidden = !prof.current;
+  chip.textContent = prof.current;
+  wrap.hidden = !show;
+  if (!show) return;
+  sel.replaceChildren();
+  const opt = (value, label) => el('option', { value }, label);
+  if (prof.root.files || prof.root.hasConfig || !prof.current) {
+    sel.append(opt('', prof.root.files
+      ? `${prof.root.name}/ itself (${prof.root.files} file${prof.root.files === 1 ? '' : 's'})`
+      : '— pick a PI —'));
+  }
+  for (const p of prof.profiles) {
+    sel.append(opt(p.name, p.name + (p.files ? '' : ' (no exports yet)')));
+  }
+  sel.append(opt('__new__', '+ New PI folder…'));
+  sel.value = prof.current;
+  sel.onchange = () => {
+    if (sel.value === '__new__') { sel.value = prof.current; newProfile(); }
+    else switchProfile(sel.value);
+  };
+}
+
+function switchProfile(name) {
+  const target = location.pathname + (name ? '?pi=' + encodeURIComponent(name) : '');
+  location.assign(target);
+}
+
+async function newProfile() {
+  const name = window.prompt(
+    'Name for the new PI folder — it becomes a folder inside '
+    + (DATA.profile ? DATA.profile.root.name : 'data') + '/ holding that PI\'s '
+    + 'exports and scenarios. A surname works well.');
+  if (name === null || !name.trim()) return;
+  try {
+    const res = await fetch(api('/api/profiles', null, ''), {
+      method: 'POST', body: JSON.stringify({ name: name.trim() }),
+    });
+    const result = await res.json();
+    if (result.error) throw new Error(result.error);
+    switchProfile(result.name);
+  } catch (err) {
+    window.alert('Could not create the folder: ' + (err.message || err));
+  }
 }
 
 function severityLabel(s) {
@@ -1602,7 +1723,7 @@ async function refreshCharges() {
   if (st.to) params.set('to', st.to);
   out.replaceChildren(el('p', { class: 'hint' }, 'Loading charges…'));
   try {
-    const res = await fetch('/api/charges?' + params.toString());
+    const res = await fetch(api('/api/charges', params));
     const payload = await res.json();
     if (payload.error) throw new Error(payload.error);
     if (seq !== chargesSeq) return;   // a newer request superseded this one
@@ -1874,9 +1995,9 @@ function renderGetData() {
     el('div', { class: 'step-head' }, el('span', { class: 'step-num' }, '1'),
       'PI Dashboard export — budgets and balances'),
     el('div', { class: 'hint' },
-      'Project Summary → your name in Project PI / Manager → export the table '
-      + 'as CSV. This one needs a few clicks in the reporting tool; the link '
-      + 'opens it on the right page.'));
+      `Project Summary → ${PI ? 'the PI\'s name (' + PI + ')' : 'your name'} in `
+      + 'Project PI / Manager → export the table as CSV. This one needs a few '
+      + 'clicks in the reporting tool; the link opens it on the right page.'));
   if (DATA.reportSource && DATA.reportSource.piDashboardUrl) {
     dash.append(el('a', {
       class: 'btn', href: DATA.reportSource.piDashboardUrl,
@@ -1962,8 +2083,20 @@ function renderGetData() {
   // step 3 — the file has to end up in data/
   box.append(el('div', { class: 'getdata-step', id: 'inbox-step' },
     el('div', { class: 'step-head' }, el('span', { class: 'step-num' }, '3'),
-      'Import what you downloaded'),
+      'Import what you downloaded' + (PI ? ' into ' + folderLabel() : '')),
     el('div', { id: 'inbox' })));
+
+  // several PIs' data on one machine: a folder each
+  const prof = DATA.profile;
+  const named = prof ? prof.profiles.length : 0;
+  box.append(el('div', { class: 'hint pi-folders' },
+    named
+      ? 'Each PI\'s exports live in their own folder inside '
+        + (prof.root.name + '/') + ' — switch with the PI menu in the header. '
+      : 'Looking after several PIs? Give each one a folder inside '
+        + (prof ? prof.root.name : 'data') + '/ — their exports, people and '
+        + 'scenarios stay separate, and you switch between them from the header. ',
+    el('button', { class: 'btn btn-x', onclick: newProfile }, '+ New PI folder')));
 
   refreshLinks();
   refreshInbox();
@@ -2022,7 +2155,7 @@ async function refreshLinks() {
   if (st.to) params.set('to', st.to);
   if (st.template) params.set('template', st.template);
   try {
-    const res = await fetch('/api/report-links?' + params.toString());
+    const res = await fetch(api('/api/report-links', params));
     const payload = await res.json();
     if (payload.error) throw new Error(payload.error);
     LINKS = payload;
@@ -2094,6 +2227,13 @@ function isNewFile(f) {
   return watchingSince !== null && f.mtime >= watchingSince && !f.imported;
 }
 
+function belongsElsewhere(f) {
+  // an export whose PI name or projects match another PI's folder and not
+  // this one — never imported here without being asked
+  const m = f.matches || [];
+  return m.length > 0 && !m.includes(PI);
+}
+
 function isReady(f) {
   // a big export may still be streaming into the folder; wait for it
   return f.settled !== false;
@@ -2102,12 +2242,13 @@ function isReady(f) {
 async function refreshInbox() {
   if (!$('#inbox')) return;
   try {
-    const res = await fetch('/api/inbox');
+    const res = await fetch(api('/api/inbox'));
     INBOX = await res.json();
   } catch {
     INBOX = null;
   }
-  const fresh = (INBOX && INBOX.files || []).filter((f) => isNewFile(f) && isReady(f));
+  const fresh = (INBOX && INBOX.files || [])
+    .filter((f) => isNewFile(f) && isReady(f) && !belongsElsewhere(f));
   if (fresh.length && fetchState().autoImport) {
     await importFiles(fresh.map((f) => f.name));
     return;
@@ -2131,28 +2272,52 @@ function renderInbox() {
   const pending = files.filter((f) => !f.imported);
   if (lastImport && Date.now() - lastImport.at < 60000) {
     box.append(el('div', { class: 'imported-note' },
-      'Imported ' + lastImport.names.join(', ') + ' into the data folder ✓'));
+      'Imported ' + lastImport.names.join(', ') + ' into ' + lastImport.into + ' ✓'));
   }
   box.append(el('div', { class: 'hint' },
     inboxTimer ? 'Watching ' + INBOX.dir + ' for the download…'
       : 'Exports found in ' + INBOX.dir + ':'));
   if (!pending.length) {
     box.append(el('div', { class: 'flag-empty' },
-      files.length ? 'Everything there is already in your data folder.'
+      files.length ? 'Everything there is already in ' + folderLabel() + '.'
         : 'Nothing to import yet.'));
   }
+  const manyFolders = DATA.profile && DATA.profile.profiles.length > 0;
   for (const f of pending) {
-    box.append(el('div', { class: 'inbox-row' + (isNewFile(f) ? ' fresh' : '') },
+    const elsewhere = belongsElsewhere(f);
+    const others = (f.importedTo || []).filter((n) => n !== PI);
+    const row = el('div', { class: 'inbox-row' + (isNewFile(f) ? ' fresh' : '') },
       el('span', { class: 'inbox-name' }, f.name),
       el('span', { class: 'badge' },
         f.type === 'detail' ? 'detail report' : 'PI Dashboard'),
-      el('span', { class: 'muted-cell' }, f.modified + ' · ' + fmtBytes(f.size)),
-      isReady(f)
-        ? el('button', { class: 'btn btn-x', onclick: () => importFiles([f.name]) },
-          'Import')
-        : el('span', { class: 'muted-cell' }, 'still downloading…')));
+      el('span', { class: 'muted-cell' }, f.modified + ' · ' + fmtBytes(f.size)));
+    if (manyFolders && f.pi) {
+      row.append(el('span', { class: 'badge' }, 'PI: ' + f.pi));
+    }
+    if (elsewhere) {
+      row.append(el('span', { class: 'badge warn', title: 'Its PI name or project '
+        + 'numbers match the exports already in that folder' },
+      'looks like ' + (f.matches[0] || folderLabel('')) + '\u2019s'));
+    }
+    if (others.length) {
+      row.append(el('span', { class: 'muted-cell' },
+        'already in ' + others.map((n) => folderLabel(n)).join(', ')));
+    }
+    if (!isReady(f)) {
+      row.append(el('span', { class: 'muted-cell' }, 'still downloading…'));
+    } else if (elsewhere) {
+      row.append(
+        el('button', { class: 'btn btn-x', onclick: () => importFiles([f.name], f.matches[0]) },
+          'Import into ' + folderLabel(f.matches[0])),
+        el('button', { class: 'btn btn-x', onclick: () => importFiles([f.name]) },
+          'Import here anyway'));
+    } else {
+      row.append(el('button', { class: 'btn btn-x', onclick: () => importFiles([f.name]) },
+        manyFolders ? 'Import into ' + folderLabel() : 'Import'));
+    }
+    box.append(row);
   }
-  const ready = pending.filter(isReady);
+  const ready = pending.filter((f) => isReady(f) && !belongsElsewhere(f));
   const row = el('div', { class: 'getdata-row' });
   if (ready.length > 1) {
     row.append(el('button', {
@@ -2168,10 +2333,15 @@ function renderInbox() {
   box.append(row);
 }
 
-async function importFiles(names) {
+async function importFiles(names, target) {
+  // target: another PI folder to import into (default: this page's)
   const box = $('#inbox');
+  const into = target === undefined ? PI : target;
+  const note = el('div', { class: 'hint' },
+    'Copying ' + names.join(', ') + ' into ' + folderLabel(into) + '…');
+  if (box) box.prepend(note);
   try {
-    const res = await fetch('/api/import', {
+    const res = await fetch(api('/api/import', null, into), {
       method: 'POST', body: JSON.stringify({ names }),
     });
     const result = await res.json();
@@ -2180,11 +2350,12 @@ async function importFiles(names) {
       clearInterval(inboxTimer);
       inboxTimer = null;
       watchingSince = null;
-      lastImport = { names: result.imported, at: Date.now() };
+      lastImport = { names: result.imported, at: Date.now(), into: folderLabel(into) };
       await load();   // re-parse and redraw everything, including this section
       return;
     }
   } catch (err) {
+    note.remove();
     if (box) {
       box.prepend(el('div', { class: 'hint' }, 'Import failed: ' + (err.message || err)));
     }

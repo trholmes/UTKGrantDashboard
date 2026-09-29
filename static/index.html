@@ -9,11 +9,14 @@
 <body>
 <header class="topbar">
   <div>
-    <h1>Grant Dashboard</h1>
+    <h1>Grant Dashboard <span id="pi-name" class="pi-name" hidden></span></h1>
     <div class="subtitle" id="data-status">Loading…</div>
   </div>
   <div class="topbar-actions">
     <span id="save-indicator" class="save-indicator" hidden>Saved ✓</span>
+    <label class="pi-switch" id="pi-switch" hidden title="Which PI's data folder this page shows">PI
+      <select id="pi-select"></select>
+    </label>
     <button id="getdata-btn" class="btn" title="Build one-click links to download fresh exports">Get fresh data</button>
     <button id="reload-btn" class="btn" title="Re-read the CSV files in the data folder">Reload data</button>
   </div>
@@ -86,7 +89,7 @@
     Local-only: this page is served from 127.0.0.1 on your machine, and the dashboard makes no
     external requests of its own — only the download links you click go anywhere, and they go
     to the reporting system. Data is read from the <code>data/</code> folder; scenarios save to
-    <code>data/config.json</code>.
+    <code>data/config.json</code> (or that PI's folder inside <code>data/</code>).
     <div class="foot-links">
       <a href="https://github.com/trholmes/UTKGrantDashboard" target="_blank" rel="noopener">Source on GitHub</a>
       ·

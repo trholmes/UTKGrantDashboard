@@ -70,7 +70,14 @@ This is the part to check before trusting it with financial data:
    (Windows). Your browser opens to `http://127.0.0.1:8787`.
 
 4. When you have fresh exports, drop them in `data/` and click
-   **Reload data** in the page header.
+   **Reload data** in the page header. A big detail export takes a while
+   to read; the header shows which file is being read and how far along
+   it is, and a reload that brings no new detail export is instant (each
+   detail file is parsed once and remembered).
+
+Looking after several PIs' grants — a business office, a department
+manager? See [Several PIs on one machine](#several-pis-on-one-machine):
+each PI gets a folder inside `data/` and the header grows a PI menu.
 
 ### Windows, without a terminal
 
@@ -187,7 +194,47 @@ Notes:
 * Re-export both whenever you want fresh numbers (monthly is plenty) and
   click **Reload data** in the page header. Old files can stay in `data/`.
 * Don't worry that the detail export is huge (hundreds of MB) — the reporting
-  tool pads it heavily; parsing is a few seconds, once, per new file.
+  tool pads it heavily. Parsing takes a while, once, per new file; while it
+  runs the header says which file is being read and how far along it is,
+  and the Reload button waits (a second click doesn't start a second
+  parse). A reload that only picks up a new PI Dashboard export is
+  instant, since detail files already read are remembered.
+
+## Several PIs on one machine
+
+A PI keeps their two exports straight in `data/` and never needs any of
+this. Someone who looks after several PIs gives each one a folder inside
+`data/` — `data/Holmes/`, `data/Doe, Jane/` — and each folder is a complete
+dashboard of its own: that PI's exports, their People table, their
+scenarios and overrides (`config.json`), all separate.
+
+* **Creating a folder:** open **Get fresh data** and click **+ New PI
+  folder** (or make the folder in Finder/Explorer). The header then shows a
+  **PI** menu listing every folder; the menu switches the whole page,
+  including *Get fresh data*, to that PI. The page's address carries the
+  choice (`?pi=Holmes`), so a browser tab per PI works too.
+* **Getting a PI's exports in:** switch to their folder first. Step 1
+  opens the PI Dashboard where you enter *that* PI's name; step 2's
+  download link covers the projects in that folder; step 3 imports the
+  download into that folder. Nothing is ever moved between folders, and
+  `data/config.json`-style scenario edits save into the PI's folder.
+* **Whose file is this?** The Downloads folder is shared, and the
+  reporting system names every export the same way. Step 3 reads the PI
+  name inside a PI Dashboard export, and the project numbers inside a
+  detail export, and matches them against what each PI folder already
+  holds: a file that belongs to another PI is labelled *looks like
+  Lee's* with an **Import into data/Lee** button, is never imported
+  automatically into the wrong folder, and a file already sitting in
+  another folder says so.
+* `report_source.json` in `data/` applies to every PI folder; one inside
+  a PI's folder overrides it for that PI alone.
+* The `data/` folder itself can still hold exports (they appear in the PI
+  menu as *data/ itself*), which is what happens when a PI adds a
+  colleague's folder next to their own files.
+
+Parsed exports stay in memory for the three folders looked at most
+recently, so switching back and forth is quick without holding every
+PI's detail export at once.
 
 ## Notes on the numbers
 
@@ -237,7 +284,10 @@ python3 -m unittest discover tests
 
 Covers the download-link plumbing (URL shape, date formats, project-number
 parsing, the bookmarklet, and the import endpoints) — the parts where a
-quiet mistake means a CSV full of zeros.
+quiet mistake means a CSV full of zeros — plus the charge lookup, the
+reload cache (each detail file parsed once, one build at a time, progress
+reported meanwhile) and the PI folders (a `?pi=` name can never reach
+outside `data/`; imports and saved scenarios stay in their PI's folder).
 
 ## Sharing with a colleague
 

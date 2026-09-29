@@ -24,6 +24,8 @@ Dashboard.bat" on Windows):
     python3 dashboard.py                 # serve on http://127.0.0.1:8787
     python3 dashboard.py --port 9000
     python3 dashboard.py --data /path/to/exports
+                                         # (with a subfolder per PI, if you
+                                         #  look after several — see README)
     python3 dashboard.py --downloads /path/to/Downloads
     python3 dashboard.py --no-inbox      # don't look at the Downloads folder
     python3 dashboard.py --no-browser
@@ -31,10 +33,13 @@ Dashboard.bat" on Windows):
 
 import argparse
 import csv
+import io
 import json
 import re
 import shutil
 import sys
+import threading
+import time
 import webbrowser
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -72,6 +77,12 @@ DEFAULT_INBOX_DIR = default_inbox_dir()
 MAX_CONFIG_BYTES = 2_000_000  # sanity cap on saved-config uploads
 MAX_INBOX_FILES = 25          # newest N candidate exports shown per scan
 SETTLE_SECONDS = 3            # how long a download must sit still to count as done
+SNIFF_ROWS = 400              # rows of a detail export read to tell whose it is
+
+# A PI folder is a plain subfolder of the data folder, named by the user
+# ("Holmes", "Doe, Jane"). Nothing exotic: letters, digits, spaces and a few
+# punctuation marks — never a path.
+PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._,'&()-]{0,79}$")
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +225,7 @@ def parse_detail(path, labor, nonlabor, meta):
     de-duplicate each side on its own key. Results accumulate into the
     passed-in dicts so several export files merge cleanly.
     """
-    with open(path, encoding="utf-8-sig", newline="") as f:
+    with _open_counting(path) as f:
         reader = csv.DictReader(f)
         l_desc_cols = _desc_columns(reader.fieldnames, "L_")
         nl_desc_cols = _desc_columns(reader.fieldnames, "NL_")
@@ -520,36 +531,182 @@ def short_name(full_name, pi_names):
     return name.strip() or full_name
 
 
-# Large detail exports (the cartesian product can reach hundreds of MB) take
-# a few seconds to parse, so cache the parsed results keyed on the CSV files'
-# (path, mtime, size) — a reload only re-parses when a file actually changes.
-# The transaction list rides along for /api/charges, which filters it live.
-_payload_cache = {"key": None, "payload": None, "transactions": None}
+# ---------------------------------------------------------------------------
+# caching, and telling the page what a slow reload is doing
+# ---------------------------------------------------------------------------
+# A detail export can be hundreds of MB and take a good while to parse, so:
+#   * each detail file is parsed once and its transactions kept, keyed on
+#     (mtime, size) — a reload after a new PI-dashboard export never re-reads
+#     the big file, and a new detail file costs one parse of that file only;
+#   * one build runs at a time (the lock), so a second click on Reload, or a
+#     page refresh, waits for the parse in flight instead of starting another;
+#   * while a build runs, PROGRESS says which file is being read and how far
+#     along it is, for /api/progress — the page shows it in the header.
+
+class _Progress:
+    """Where the current build is, readable from any thread."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._state = {"active": False}
+
+    def start(self, plan):
+        """plan: [(name, size), ...] — the files about to be read."""
+        with self._lock:
+            self._state = {
+                "active": True, "stage": "reading",
+                "file": None, "fileIndex": 0, "fileCount": len(plan),
+                "fileBytes": 0, "fileSize": 0,
+                "bytesDone": 0, "bytesTotal": sum(size for _, size in plan),
+                "startedAt": time.time(),
+            }
+
+    def begin_file(self, name, size):
+        with self._lock:
+            st = self._state
+            st.update(file=name, fileIndex=st["fileIndex"] + 1,
+                      fileBytes=0, fileSize=size)
+
+    def advance(self, n):
+        with self._lock:
+            st = self._state
+            if st["active"]:
+                st["fileBytes"] += n
+                st["bytesDone"] += n
+
+    def stage(self, name):
+        with self._lock:
+            self._state["stage"] = name
+
+    def finish(self):
+        with self._lock:
+            self._state = {"active": False}
+
+    def snapshot(self):
+        with self._lock:
+            return dict(self._state)
 
 
-def _ensure_cache(data_dir):
-    key = tuple(sorted(
+PROGRESS = _Progress()
+
+
+class _CountingReader(io.RawIOBase):
+    """A raw file whose reads report their byte counts to PROGRESS."""
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    def readable(self):
+        return True
+
+    def readinto(self, b):
+        n = self._raw.readinto(b)
+        if n:
+            PROGRESS.advance(n)
+            # parsing is CPU-bound and holds the interpreter lock; yielding
+            # once per chunk keeps /api/progress answering promptly meanwhile
+            time.sleep(0)
+        return n
+
+    def close(self):
+        self._raw.close()
+        super().close()
+
+
+def _open_counting(path):
+    """open(path) for CSV reading, with progress reporting on the way in."""
+    raw = open(path, "rb", buffering=0)
+    return io.TextIOWrapper(io.BufferedReader(_CountingReader(raw), 1 << 16),
+                            encoding="utf-8-sig", newline="")
+
+
+_build_lock = threading.Lock()
+_detail_cache = {}    # str(path) -> {"key": (mtime, size), "labor", "nonlabor", "meta"}
+_payload_cache = {}   # str(data_dir) -> {"key", "payload", "transactions"}
+_recent_dirs = []     # data folders built most recently, newest first
+KEEP_DIRS = 3         # parsed data kept in memory for this many folders
+
+
+def _cache_key(data_dir):
+    return tuple(sorted(
         (str(p), p.stat().st_mtime, p.stat().st_size)
         for p in Path(data_dir).glob("*.csv")
     )) + (date.today().isoformat(),)
-    if _payload_cache["key"] != key:
-        payload, transactions = _build_payload_uncached(data_dir)
-        _payload_cache.update(key=key, payload=payload, transactions=transactions)
-    return _payload_cache
 
 
-def build_payload(data_dir):
-    payload = dict(_ensure_cache(data_dir)["payload"])
+def _ensure_cache(data_dir, root=None):
+    with _build_lock:
+        key = _cache_key(data_dir)
+        entry = _payload_cache.get(str(data_dir))
+        if entry is None or entry["key"] != key:
+            payload, transactions = _build_payload_uncached(data_dir, root)
+            entry = {"key": key, "payload": payload, "transactions": transactions}
+            _payload_cache[str(data_dir)] = entry
+            _remember_dir(data_dir)
+        return entry
+
+
+def _remember_dir(data_dir):
+    """Keep parsed data for the last few folders looked at; drop the rest.
+
+    Someone switching between several PIs' folders would otherwise keep every
+    one of their detail exports in memory.
+    """
+    d = str(Path(data_dir).resolve())
+    if d in _recent_dirs:
+        _recent_dirs.remove(d)
+    _recent_dirs.insert(0, d)
+    del _recent_dirs[KEEP_DIRS:]
+    for k in list(_payload_cache):
+        if str(Path(k).resolve()) not in _recent_dirs:
+            del _payload_cache[k]
+    for k in list(_detail_cache):
+        if str(Path(k).resolve().parent) not in _recent_dirs or not Path(k).is_file():
+            del _detail_cache[k]
+
+
+def _cached_detail(path, stat):
+    key = (stat.st_mtime, stat.st_size)
+    entry = _detail_cache.get(str(path))
+    if entry is None or entry["key"] != key:
+        labor, nonlabor, meta = {}, {}, {}
+        parse_detail(path, labor, nonlabor, meta)
+        entry = {"key": key, "labor": labor, "nonlabor": nonlabor, "meta": meta}
+        _detail_cache[str(path)] = entry
+    return entry
+
+
+def _merge_meta(into, other):
+    """Fold one export's per-project metadata into the merged view: first
+    file to name a project wins its name and dates, the F&A rate is the
+    latest one seen, and the report windows accumulate."""
+    for pid, src in other.items():
+        m = into.setdefault(pid, {
+            "name": None, "start": None, "end": None,
+            "faRate": None, "windows": set(),
+        })
+        m["name"] = m["name"] or src["name"]
+        m["start"] = m["start"] or src["start"]
+        m["end"] = m["end"] or src["end"]
+        if src["faRate"] is not None:
+            m["faRate"] = src["faRate"]
+        m["windows"] |= src["windows"]
+
+
+def build_payload(data_dir, root=None):
+    payload = dict(_ensure_cache(data_dir, root)["payload"])
     payload["config"] = load_config(data_dir)  # config always fresh
+    if root is not None:
+        payload["profile"] = profile_info(root, data_dir)
     return payload
 
 
-def load_transactions(data_dir):
+def load_transactions(data_dir, root=None):
     """Every de-duplicated transaction from the detail exports (cached)."""
-    return _ensure_cache(data_dir)["transactions"]
+    return _ensure_cache(data_dir, root)["transactions"]
 
 
-def _build_payload_uncached(data_dir):
+def _build_payload_uncached(data_dir, root=None):
     today_iso = date.today().isoformat()
     this_month = today_iso[:7]
 
@@ -557,17 +714,40 @@ def _build_payload_uncached(data_dir):
     dash_files = []           # (mtime, rows)
     labor, nonlabor, meta = {}, {}, {}
 
-    for path in sorted(Path(data_dir).glob("*.csv")):
-        kind = classify_csv(path)
-        files_info.append({
-            "name": path.name,
-            "type": kind or "unrecognized",
-            "modified": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
-        })
-        if kind == "pi_dashboard":
-            dash_files.append((path.stat().st_mtime, parse_pi_dashboard(path)))
-        elif kind == "detail":
-            parse_detail(path, labor, nonlabor, meta)
+    files = [(p, p.stat(), classify_csv(p)) for p in sorted(Path(data_dir).glob("*.csv"))]
+    # what actually has to be read: detail exports not parsed yet (or changed)
+    plan = [(p.name, st.st_size) for p, st, kind in files
+            if kind == "detail" and (str(p) not in _detail_cache
+                                     or _detail_cache[str(p)]["key"] != (st.st_mtime, st.st_size))]
+    PROGRESS.start(plan)
+    try:
+        for path, stat, kind in files:
+            files_info.append({
+                "name": path.name,
+                "type": kind or "unrecognized",
+                "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            })
+            if kind == "pi_dashboard":
+                dash_files.append((stat.st_mtime, parse_pi_dashboard(path)))
+            elif kind == "detail":
+                if any(name == path.name for name, _ in plan):
+                    PROGRESS.begin_file(path.name, stat.st_size)
+                entry = _cached_detail(path, stat)
+                for key, t in entry["labor"].items():
+                    labor.setdefault(key, t)
+                for key, t in entry["nonlabor"].items():
+                    nonlabor.setdefault(key, t)
+                _merge_meta(meta, entry["meta"])
+        PROGRESS.stage("analyzing")
+        return _analyze(data_dir, root, today_iso, this_month, files_info, dash_files,
+                        labor, nonlabor, meta)
+    finally:
+        PROGRESS.finish()
+
+
+def _analyze(data_dir, root, today_iso, this_month, files_info, dash_files,
+             labor, nonlabor, meta):
+    """The number-crunching half of a build, on already-parsed exports."""
 
     # newest PI-dashboard file wins per project
     dash_by_project = {}
@@ -746,7 +926,7 @@ def _build_payload_uncached(data_dir):
 
     flags = compute_flags([p for p in projects if p["inDashboard"]], today_iso)
 
-    source = spn_reports.load_source(data_dir)
+    source = load_report_source(data_dir, root)
     return {
         "today": today_iso,
         "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -764,8 +944,152 @@ def _build_payload_uncached(data_dir):
 
 
 # ---------------------------------------------------------------------------
-# saved configuration (people edits, scenarios) — lives next to the data
+# PI folders — one data folder per PI, for someone who looks after several
 # ---------------------------------------------------------------------------
+# A PI keeps their exports straight in data/ and never sees any of this. A
+# business office keeps a subfolder per PI (data/Holmes, data/Lee, ...): each
+# is a complete data folder of its own — exports, config.json, scenarios —
+# and the page switches between them with ?pi=<name>. Nothing is ever moved
+# between folders; imports land in whichever folder the page is showing.
+
+class NoSuchProfile(ValueError):
+    pass
+
+
+def profile_name_ok(name):
+    return bool(PROFILE_NAME_RE.match(name or "")) and ".." not in name \
+        and not name.endswith(".")
+
+
+def profile_dir(root, name):
+    """The data folder for a PI name (the root itself for no name)."""
+    root = Path(root)
+    if not name:
+        return root
+    if not profile_name_ok(name):
+        raise NoSuchProfile(f"not a usable PI folder name: {name!r}")
+    d = root / name
+    if not d.is_dir() or d.resolve().parent != root.resolve():
+        raise NoSuchProfile(f"there is no PI folder named {name!r} in {root}")
+    return d
+
+
+def create_profile(root, name):
+    """Make data/<name>/ (a no-op if it exists) and return the clean name."""
+    name = " ".join(str(name or "").split())
+    if not profile_name_ok(name):
+        raise ValueError("a PI folder name is letters, digits, spaces and "
+                         "simple punctuation — e.g. \"Holmes\" or \"Doe, Jane\"")
+    d = Path(root) / name
+    d.mkdir(exist_ok=True)
+    return name
+
+
+def _folder_summary(d):
+    files = [p for p in Path(d).glob("*.csv") if classify_csv(p)]
+    newest = max((p.stat().st_mtime for p in files), default=None)
+    return {
+        "files": len(files),
+        "modified": datetime.fromtimestamp(newest).strftime("%Y-%m-%d") if newest else None,
+        "hasConfig": config_path(d).is_file(),
+    }
+
+
+def list_profiles(root):
+    """The PI folders inside the data folder, alphabetically."""
+    out = []
+    try:
+        children = sorted(Path(root).iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return out
+    for d in children:
+        if d.is_dir() and not d.name.startswith((".", "_")) and profile_name_ok(d.name):
+            out.append(dict(_folder_summary(d), name=d.name))
+    return out
+
+
+def profile_info(root, data_dir):
+    """What the page needs for its PI switcher."""
+    root = Path(root)
+    data_dir = Path(data_dir)
+    current = "" if data_dir.resolve() == root.resolve() else data_dir.name
+    return {
+        "current": current,
+        "root": dict(_folder_summary(root), name=root.name, path=str(root)),
+        "profiles": list_profiles(root),
+    }
+
+
+def load_report_source(data_dir, root=None, **overrides):
+    """report_source.json from the data folder, then the PI folder's own."""
+    dirs = [root, data_dir] if root and Path(root) != Path(data_dir) else [data_dir]
+    return spn_reports.load_source(dirs, **overrides)
+
+
+# --- whose export is this? -------------------------------------------------
+# The Downloads folder is shared by every PI someone looks after, and the
+# reporting system names every export the same way. A PI-dashboard export
+# carries the PI's name; a detail export carries project numbers; either
+# can be matched against what each PI folder already holds.
+
+_sniff_cache = {}   # str(path) -> {"key": (mtime, size), "pis": set, "projects": set}
+
+
+def sniff_csv(path, kind=None):
+    """PI names and project numbers named in an export (the first rows of a
+    detail export are plenty — its cartesian product repeats them)."""
+    path = Path(path)
+    try:
+        stat = path.stat()
+    except OSError:
+        return {"pis": set(), "projects": set()}
+    key = (stat.st_mtime, stat.st_size)
+    hit = _sniff_cache.get(str(path))
+    if hit and hit["key"] == key:
+        return hit
+    kind = kind or classify_csv(path)
+    pis, projects = set(), set()
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            headers = reader.fieldnames or []
+            pi_col = next((h for h in headers if "PI" in h and "Manager" in h), None)
+            proj_col = ("Project Number" if kind == "pi_dashboard" else "PROJ_NUMBER")
+            for i, row in enumerate(reader):
+                if kind == "detail" and i >= SNIFF_ROWS:
+                    break
+                code = (row.get(proj_col) or "").strip().upper()
+                if code:
+                    projects.add(code)
+                if pi_col:
+                    pi = " ".join((row.get(pi_col) or "").split())
+                    if pi:
+                        pis.add(pi)
+    except (OSError, csv.Error, ValueError):   # ValueError: a half-written file
+        pass
+    hit = {"key": key, "pis": pis, "projects": projects}
+    _sniff_cache[str(path)] = hit
+    return hit
+
+
+def folder_identity(d):
+    """PI names and projects in a data folder's PI-dashboard exports (small
+    files; the detail exports are not read for this)."""
+    pis, projects = set(), set()
+    for p in Path(d).glob("*.csv"):
+        if classify_csv(p) == "pi_dashboard":
+            found = sniff_csv(p, "pi_dashboard")
+            pis |= found["pis"]
+            projects |= found["projects"]
+    return {"pis": pis, "projects": projects}
+
+
+def match_owner(found, identities):
+    """Names of the folders an export's PI names or projects overlap with."""
+    return [name for name, ident in identities
+            if (found["pis"] & ident["pis"]) or (found["projects"] & ident["projects"])]
+
+
 
 def config_path(data_dir):
     return Path(data_dir) / "config.json"
@@ -796,14 +1120,20 @@ def save_config(data_dir, payload):
 # itself unless the front-end asks (which it only does for files that appeared
 # after you clicked a download link).
 
-def scan_inbox(inbox_dir, data_dir):
+def scan_inbox(inbox_dir, data_dir, root=None):
     """Recognized CSV exports in the Downloads folder, newest first.
 
     Everything here tolerates files appearing and vanishing mid-scan: this
     runs while a browser is writing a download into the very same folder.
+    With a root, each file also says which PI folders it seems to belong to
+    (by PI name or project numbers) and which already hold a copy.
     """
     if inbox_dir is None:
         return []
+    # (name, folder) for every data folder an export could go into
+    folders = [("", Path(root))] if root else []
+    folders += [(p["name"], Path(root) / p["name"]) for p in list_profiles(root)] if root else []
+    identities = [(name, folder_identity(d)) for name, d in folders]
     try:
         candidates = [p for p in Path(inbox_dir).iterdir() if p.suffix.lower() == ".csv"]
     except OSError:
@@ -826,6 +1156,15 @@ def scan_inbox(inbox_dir, data_dir):
         if kind is None:
             continue
         existing = Path(data_dir) / path.name
+
+        def has_copy(d):
+            try:
+                other = d / path.name
+                return other.is_file() and other.stat().st_size == stat.st_size
+            except OSError:
+                return False
+
+        sniffed = sniff_csv(path, kind) if root else {"pis": set(), "projects": set()}
         found.append({
             "name": path.name,
             "type": kind,
@@ -833,10 +1172,15 @@ def scan_inbox(inbox_dir, data_dir):
             "mtime": stat.st_mtime,
             "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
             # same name and size in data/ already: importing again is a no-op
-            "imported": existing.is_file() and existing.stat().st_size == stat.st_size,
+            "imported": has_copy(Path(data_dir)),
             # a detail export can be hundreds of MB, and some browsers write
             # straight to the final name — don't import one mid-download
             "settled": now - stat.st_mtime >= SETTLE_SECONDS,
+            # the PI named inside a PI-dashboard export, if any
+            "pi": ", ".join(sorted(sniffed["pis"])),
+            # PI folders whose exports overlap this one, and those with a copy
+            "matches": match_owner(sniffed, identities),
+            "importedTo": [name for name, d in folders if has_copy(d)],
         })
         if len(found) >= MAX_INBOX_FILES:
             break
@@ -876,7 +1220,7 @@ def import_from_inbox(names, inbox_dir, data_dir):
     return {"imported": imported, "skipped": skipped}
 
 
-def charges_response(query, data_dir):
+def charges_response(query, data_dir, root=None):
     """Filtered transaction list for /api/charges (the charge lookup section).
 
     ?project=SPN107048&project=SPN107049&from=2026-06-01&to=2026-09-18 —
@@ -898,7 +1242,7 @@ def charges_response(query, data_dir):
         raise ValueError("the end of the date window is before its start")
 
     charges, undated, total = [], 0, 0.0
-    for t in load_transactions(data_dir):
+    for t in load_transactions(data_dir, root):
         if t["project"] not in wanted:
             continue
         if t["date"] is None:
@@ -922,10 +1266,10 @@ def charges_response(query, data_dir):
     }
 
 
-def report_links_response(query, data_dir):
+def report_links_response(query, data_dir, root=None):
     """Build the download links for /api/report-links from its query string."""
     projects = spn_reports.normalize_projects(query.get("projects", []))
-    source = spn_reports.load_source(data_dir, template=_one(query, "template"))
+    source = load_report_source(data_dir, root, template=_one(query, "template"))
     from_date = _one(query, "from")
     to_date = _one(query, "to")
     combined = _one(query, "mode") != "per-project"
@@ -965,9 +1309,18 @@ CONTENT_TYPES = {
 }
 
 
-def make_handler(data_dir, inbox_dir=None):
+def make_handler(root_dir, inbox_dir=None):
+    """The request handler for a data folder (whose PI subfolders, if any,
+    are reached with ?pi=<name> on every API call)."""
+    root_dir = Path(root_dir)
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "UTKGrantDashboard/1.0"
+
+        def _data_dir(self, query):
+            """The data folder this request is about: the PI folder named
+            by ?pi=, or the data folder itself."""
+            return profile_dir(root_dir, _one(query, "pi"))
 
         def _send(self, code, body, ctype="application/json"):
             data = body if isinstance(body, bytes) else body.encode("utf-8")
@@ -1012,40 +1365,52 @@ def make_handler(data_dir, inbox_dir=None):
                 return
             parts = urlparse(self.path)
             path = parts.path
+            query = parse_qs(parts.query, keep_blank_values=True)
             if path == "/":
                 self._send_file(STATIC_DIR / "index.html")
             elif path.startswith("/static/"):
                 self._send_file(STATIC_DIR / path[len("/static/"):])
+            elif path == "/api/progress":
+                # never waits on a build — it is how the page watches one
+                self._send(200, json.dumps(PROGRESS.snapshot()))
             elif path == "/api/data":
                 try:
-                    payload = build_payload(data_dir)
+                    payload = build_payload(self._data_dir(query), root_dir)
                     self._send(200, json.dumps(payload))
+                except NoSuchProfile as exc:
+                    self._send(404, json.dumps({"error": str(exc)}))
                 except Exception as exc:  # surface parse errors in the UI
                     self._send(500, json.dumps({"error": str(exc)}))
             elif path == "/api/report-links":
                 try:
-                    query = parse_qs(parts.query, keep_blank_values=True)
-                    self._send(200, json.dumps(report_links_response(query, data_dir)))
+                    self._send(200, json.dumps(
+                        report_links_response(query, self._data_dir(query), root_dir)))
                 except Exception as exc:
                     self._send(400, json.dumps({"error": str(exc)}))
             elif path == "/api/charges":
                 try:
-                    query = parse_qs(parts.query, keep_blank_values=True)
-                    self._send(200, json.dumps(charges_response(query, data_dir)))
+                    self._send(200, json.dumps(
+                        charges_response(query, self._data_dir(query), root_dir)))
                 except Exception as exc:
                     self._send(400, json.dumps({"error": str(exc)}))
             elif path == "/api/inbox":
-                self._send(200, json.dumps({
-                    "dir": str(inbox_dir) if inbox_dir else None,
-                    "files": scan_inbox(inbox_dir, data_dir),
-                }))
+                try:
+                    self._send(200, json.dumps({
+                        "dir": str(inbox_dir) if inbox_dir else None,
+                        "files": scan_inbox(inbox_dir, self._data_dir(query), root_dir),
+                    }))
+                except Exception as exc:
+                    self._send(400, json.dumps({"error": str(exc)}))
             else:
                 self._send(404, json.dumps({"error": "not found"}))
 
         def do_POST(self):
             if not self._local_caller():
                 return
-            if self.path not in ("/api/config", "/api/import"):
+            parts = urlparse(self.path)
+            path = parts.path
+            query = parse_qs(parts.query, keep_blank_values=True)
+            if path not in ("/api/config", "/api/import", "/api/profiles"):
                 self._send(404, json.dumps({"error": "not found"}))
                 return
             try:
@@ -1053,7 +1418,13 @@ def make_handler(data_dir, inbox_dir=None):
                 if length > MAX_CONFIG_BYTES:
                     raise ValueError("request too large")
                 body = json.loads(self.rfile.read(length).decode("utf-8"))
-                if self.path == "/api/config":
+                if path == "/api/profiles":
+                    name = body.get("name") if isinstance(body, dict) else None
+                    created = create_profile(root_dir, name)
+                    self._send(200, json.dumps({"ok": True, "name": created}))
+                    return
+                data_dir = self._data_dir(query)
+                if path == "/api/config":
                     save_config(data_dir, body)
                     self._send(200, json.dumps({"ok": True}))
                 else:
@@ -1075,7 +1446,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--data", type=Path, default=DEFAULT_DATA_DIR,
-                    help="folder containing the CSV exports (default: ./data)")
+                    help="folder containing the CSV exports (default: ./data); "
+                         "a subfolder per PI if you look after several")
     ap.add_argument("--downloads", type=Path, default=DEFAULT_INBOX_DIR,
                     help="where your browser saves downloads, so freshly "
                          "downloaded exports can be imported with one click "
