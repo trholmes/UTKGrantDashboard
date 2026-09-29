@@ -21,7 +21,7 @@ function el(tag, attrs, ...children) {
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
     else if (v !== undefined && v !== null && v !== false) node.setAttribute(k, v);
   }
-  for (const c of children.flat()) {
+  for (const c of children.flat(Infinity)) {
     if (c === null || c === undefined) continue;
     node.append(c.nodeType ? c : document.createTextNode(c));
   }
@@ -38,6 +38,10 @@ const fmtK = (v) => {
   return sign + '$' + Math.round(a);
 };
 const fmtPct = (v) => (v * 100).toFixed(0) + '%';
+const fmtCents = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+// rounded on the page, exact to the cent on hover
+const money = (v, suffix) => el('span', { class: 'money', title: fmtCents.format(v) }, fmt$(v) + (suffix || ''));
+const moneyK = (v) => el('span', { class: 'money', title: fmtCents.format(v) }, fmtK(v));
 const fmtBytes = (n) => (n >= 1e6 ? (n / 1e6).toFixed(0) + ' MB'
   : n >= 1e3 ? (n / 1e3).toFixed(0) + ' kB' : n + ' B');
 
@@ -470,21 +474,21 @@ function renderSummary() {
 
   card.append(el('div', { class: 'sim-stats' },
     stat('Active awards', String(active.length),
-      `${fmt$(totBudget)} total · ${fmt$(totSpent)} spent`),
-    stat('Available now', fmt$(available),
-      [(extraTotal > 0 ? `+ ${fmt$(extraTotal)} expected (entered manually) · ` : ''),
+      [money(totBudget), ' total · ', money(totSpent), ' spent']),
+    stat('Available now', money(available),
+      [(extraTotal > 0 ? ['+ ', money(extraTotal), ' expected (entered manually) · '] : ''),
        (expired > 0
-         ? el('span', { class: 'expires-warn' }, `${fmt$(expired)} expires unspent at this pace`)
+         ? el('span', { class: 'expires-warn' }, money(expired), ' expires unspent at this pace')
          : 'across all active awards')]),
-    stat('Current team', fmt$(baseMonthly) + '/mo',
+    stat('Current team', money(baseMonthly, '/mo'),
       `${yearRound.length} people year-round — salary+fringe+fees+their F&A`
         + (summerFolk.length
-          ? ` · ${fmt$(peakMonthly)}/mo in ${summerMonths} (${summerFolk.map((t) => t.person.name).join(', ')} summer salary)`
+          ? ` · ${fmtCents.format(peakMonthly)}/mo in ${summerMonths} (${summerFolk.map((t) => t.person.name).join(', ')} summer salary)`
           : '')
         + (team.some((t) => t.person.endMonth || t.person.payChangeMonth)
           ? ' · scheduled departures/pay changes applied' : '')),
     (() => {
-      const s = stat('Other spending', fmt$(otherTrend) + '/mo',
+      const s = stat('Other spending', money(otherTrend, '/mo'),
         '12-mo trend: travel, supplies, F&A on non-salary costs — personnel F&A and fees count with each person (hover for per-award breakdown)');
       s.title = otherBreakdown.join('\n');
       return s;
@@ -492,7 +496,7 @@ function renderSummary() {
     stat('Funded through', fmtMonth(fundedThrough),
       runsOut === null
         ? 'to the end of your last award'
-        : `bring in new money by then (${fmt$(unmet)} short through ${fmtMonth(horizon)})`,
+        : ['bring in new money by then (', money(unmet), ` short through ${fmtMonth(horizon)})`],
       runwayMonths >= 12 ? 'ok' : 'bad')));
 
   // ground the projection with reconstructed history: total available funds
@@ -756,7 +760,7 @@ function renderPortfolio() {
     }
     if (sf !== null) {
       card.append(meter('Budget spent', sf,
-        `${fmtPct(sf)} · ${fmt$(p.totals.remaining)} left`));
+        [`${fmtPct(sf)} · `, money(p.totals.remaining), ' left']));
     }
 
     // category table
@@ -772,9 +776,9 @@ function renderPortfolio() {
       const frac = c.budget > 0 ? c.spent / c.budget : (c.spent > 0 ? 1.01 : 0);
       tbl.append(el('tr', {},
         el('td', { title: c.category }, CAT_SHORT[c.category] || c.category),
-        el('td', {}, fmtK(c.budget)),
-        el('td', {}, fmtK(c.spent)),
-        el('td', { class: c.remaining < -0.5 ? 'neg' : '' }, fmtK(c.remaining)),
+        el('td', {}, moneyK(c.budget)),
+        el('td', {}, moneyK(c.spent)),
+        el('td', { class: c.remaining < -0.5 ? 'neg' : '' }, moneyK(c.remaining)),
         el('td', { class: 'catbar' },
           el('div', { class: 'track' },
             el('div', {
@@ -784,9 +788,9 @@ function renderPortfolio() {
     }
     tbl.append(el('tr', { class: 'total-row' },
       el('td', {}, 'Total award'),
-      el('td', {}, fmt$(p.totals.budget)),
-      el('td', {}, fmt$(p.totals.spent)),
-      el('td', { class: p.totals.remaining < -0.5 ? 'neg' : '' }, fmt$(p.totals.remaining)),
+      el('td', {}, money(p.totals.budget)),
+      el('td', {}, money(p.totals.spent)),
+      el('td', { class: p.totals.remaining < -0.5 ? 'neg' : '' }, money(p.totals.remaining)),
       el('td', {})));
     card.append(tbl);
 
@@ -904,7 +908,7 @@ function renderPortfolio() {
       const extra = (p.burn.avg12 != null && p.burn.recent != null)
         ? ` · last 3 mo ${fmt$(p.burn.recent)}/mo` : '';
       card.append(el('div', { class: 'burn-line' },
-        'Burn ≈ ', el('b', {}, fmt$(burn) + '/mo'), ` (${src})${extra} · ${runTxt}`));
+        'Burn ≈ ', el('b', {}, money(burn, '/mo')), ` (${src})${extra} · ${runTxt}`));
     } else if (active && !hasMonthly) {
       card.append(el('div', { class: 'burn-line' },
         'No transaction detail loaded for this award — add an expenditure detail export (RPT…) for real burn rates.'));
@@ -928,7 +932,7 @@ function renderPortfolio() {
             }),
             person.name,
             person.faculty ? el('span', { class: 'badge', style: 'margin-left:6px' }, 'PI summer') : null),
-          el('td', {}, stale ? '—' : fmt$(person.monthly) + '/mo'),
+          el('td', {}, stale ? '—' : money(person.monthly, '/mo')),
           el('td', { class: 'muted-cell' }, 'last paid ' + fmtMonth(person.lastPaid))));
       }
       section.append(tbl);
@@ -1321,7 +1325,6 @@ let chargesText = '';     // client-side text filter (not persisted)
 let chargesShowAll = false;
 let chargesSeq = 0;       // drop out-of-order fetch responses
 
-const fmtCents = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
 function chargesState() {
   const ui = CFG.ui;
@@ -1533,7 +1536,7 @@ function renderChargesResults() {
     : MONTH_NAMES[+m.slice(5, 7) - 1] + ' ’' + m.slice(2, 4));
   const cell = (v) => (v === undefined
     ? el('td', { class: 'cell-empty' }, '—')
-    : el('td', { class: v < -0.005 ? 'neg' : '' }, fmt$(v)));
+    : el('td', { class: v < -0.005 ? 'neg' : '' }, money(v)));
 
   if (cols.length && rowList.length) {
     const grid = el('table', { class: 'cats charges-grid' });
@@ -1558,16 +1561,16 @@ function renderChargesResults() {
           r.person ? el('span', { class: 'muted-cell' }, ' — ' + r.person) : '',
           award ? el('span', { class: 'muted-cell' }, ' · ' + award) : ''),
         cols.map((m) => cell(r.byMonth[m])),
-        el('td', { class: r.total < -0.005 ? 'neg' : '' }, fmt$(r.total))));
+        el('td', { class: r.total < -0.005 ? 'neg' : '' }, money(r.total))));
     }
     grid.append(el('tr', { class: 'total-row' },
       el('td', {}, 'Total'),
       cols.map((m) => {
         const v = rowList.reduce((a, r) => a + (r.byMonth[m] || 0), 0);
         return el('td', { class: v < -0.005 ? 'neg' : '' },
-          rowList.some((r) => r.byMonth[m] !== undefined) ? fmt$(v) : '');
+          rowList.some((r) => r.byMonth[m] !== undefined) ? money(v) : '');
       }),
-      el('td', {}, fmt$(total))));
+      el('td', {}, money(total))));
     out.append(el('div', { class: 'spark-title', style: 'margin-top:10px' },
       'What landed each month — a blank cell means nothing posted'));
     out.append(el('div', { class: 'charges-wrap' }, grid));
