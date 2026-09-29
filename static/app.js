@@ -1496,7 +1496,7 @@ function renderPeople() {
       },
     }, 'Restore')) : null;
 
-  box.replaceChildren(el('div', { class: 'people-wrap' }, tbl), escRow, hiddenRow);
+  box.replaceChildren(...[el('div', { class: 'people-wrap' }, tbl), escRow, hiddenRow].filter(Boolean));
 }
 
 /* ----- portfolio summary figure: balance line over stacked cost bars ----- */
