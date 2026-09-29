@@ -269,8 +269,10 @@ function initConfig() {
   CFG.escalation = CFG.escalation && typeof CFG.escalation === 'object'
     ? CFG.escalation : { ut: 0.03, gra: 0.05, fees: 0.02 };
   $('#show-notes').checked = !!CFG.ui.showNotes;
-  // merge in newly-detected payroll people (matched by name)
-  const known = new Set(CFG.people.map((p) => p.name));
+  // merge in newly-detected payroll people (matched by name) — except the
+  // ones removed from the table by hand, which stay removed until restored
+  CFG.hiddenPeople = Array.isArray(CFG.hiddenPeople) ? CFG.hiddenPeople : [];
+  const known = new Set(CFG.people.map((p) => p.name).concat(CFG.hiddenPeople));
   for (const det of DATA.people) {
     if (known.has(det.name)) continue;
     CFG.people.push({
@@ -1314,7 +1316,7 @@ function supportCell(person, det) {
           if (!person.plannedSupport.length) person.plannedSupport = [{ project: '', pct: 100 }];
           rerender();
         },
-      }, 'edit')));
+      }, 'change split')));
     return cell;
   }
 
@@ -1389,7 +1391,7 @@ function renderPeople() {
       el('th', {}, 'Name'), el('th', { class: 'num' }, 'Salary ($/mo)'),
       el('th', { class: 'num' }, 'Fringe (%)'), el('th', { class: 'num' }, 'Fees ($/yr)'),
       el('th', {}, 'Expected end'), el('th', {}, 'Pay change'),
-      el('th', {}, 'Support (grant · % of salary)'), el('th', {})));
+      el('th', {}, 'Support (grant · % of salary)')));
 
   const filter = grantFilter();
   const onSelected = (person, det) =>
@@ -1426,7 +1428,19 @@ function renderPeople() {
                 + (det.paidMonthNums || []).map((n) => MONTH_NAMES[n - 1]).join('/')
               : ''),
         }),
-        person.source !== 'payroll' ? el('span', { class: 'badge', style: 'margin-left:5px' }, 'manual') : null),
+        person.source !== 'payroll' ? el('span', { class: 'badge', style: 'margin-left:5px' }, 'manual') : null,
+        el('button', {
+          class: 'btn danger btn-x remove-person',
+          title: 'Remove ' + (person.name || 'this person') + ' from the table and the projections'
+            + (person.source === 'payroll' ? ' (payroll won\'t add them back; a Restore link appears below)' : ''),
+          onclick: () => {
+            CFG.people = CFG.people.filter((p) => p !== person);
+            if (person.source === 'payroll' && person.name && !CFG.hiddenPeople.includes(person.name)) {
+              CFG.hiddenPeople.push(person.name);
+            }
+            save(); renderSummary(); renderPortfolio(); renderPeople();
+          },
+        }, '✕')),
       el('td', { class: 'num' }, numIn('monthlySalary', 0, 50)),
       el('td', { class: 'num' }, numIn('fringeRate', 100, 0.1)),
       el('td', { class: 'num' }, numIn('annualFees', 0, 100)),
@@ -1453,14 +1467,7 @@ function renderPeople() {
             save(); renderSummary(); renderPortfolio();
           },
         })),
-      supportCell(person, det),
-      el('td', {}, el('button', {
-        class: 'btn danger btn-x', title: 'Remove person',
-        onclick: () => {
-          CFG.people = CFG.people.filter((p) => p !== person);
-          save(); renderSummary(); renderPortfolio(); renderPeople();
-        },
-      }, '✕'))));
+      supportCell(person, det)));
   }
   const esc = CFG.escalation;
   const escIn = (key, title) => amountInput({
@@ -1477,7 +1484,19 @@ function renderPeople() {
     escIn('gra', 'annual raise for graduate assistants (detected from payroll type)'), '% · fees/tuition ',
     escIn('fees', 'annual increase applied to fees and tuition'), '%');
 
-  box.replaceChildren(el('div', { class: 'people-wrap' }, tbl), escRow);
+  const hidden = CFG.hiddenPeople.filter((name) => DATA.people.some((d) => d.name === name));
+  const hiddenRow = hidden.length ? el('div', { class: 'hint hidden-people' },
+    'Removed, though payroll lists them: ' + hidden.join(', ') + ' ',
+    el('button', {
+      class: 'btn btn-x', title: 'Put them back in the table, seeded from payroll again',
+      onclick: () => {
+        CFG.hiddenPeople = [];
+        initConfig();
+        save(); renderSummary(); renderPortfolio(); renderPeople();
+      },
+    }, 'Restore')) : null;
+
+  box.replaceChildren(el('div', { class: 'people-wrap' }, tbl), escRow, hiddenRow);
 }
 
 /* ----- portfolio summary figure: balance line over stacked cost bars ----- */

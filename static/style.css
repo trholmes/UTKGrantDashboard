@@ -212,6 +212,8 @@ table.people { min-width: 960px; }
 table.people th, table.people td { padding: 4px 8px; white-space: nowrap; }
 table.people input { padding: 2px 5px; font-size: 12.5px; }
 table.people td.name-cell input { width: 88px; }
+.remove-person { margin-left: 6px; padding: 0 6px; }
+.hidden-people { margin-top: 6px; }
 table.people input.amount { width: 68px; text-align: right; }
 table.people input.newpay { width: 86px; }
 input.month-in { width: 80px; }

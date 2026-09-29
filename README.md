@@ -22,10 +22,12 @@ already pull from the university reporting system, and gives you:
   automatically from the payroll lines in your detail export, with their
   real salaries, fringe rates, and support splits. Add a person and pick
   their grant to model a hire, split anyone across grants with **+ split**
-  (a payroll split can be edited into a what-if — move a student to
+  (a payroll split can be changed into a what-if — move a student to
   another award, or 50/50 them — and reset); set an expected end date for
   a graduation, or a scheduled pay change — every edit flows straight into
   the projections (salary + fringe + fees + the F&A each award charges).
+  The ✕ by a name removes them; a payroll person stays removed across
+  reloads until you click *Restore* under the table.
 
 ![The dashboard, showing fictional demo data](docs/screenshot.png)
 
