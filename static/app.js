@@ -403,22 +403,27 @@ function renderSummary() {
   // current team = people with a salary in the last 2 months of detail data,
   // plus manual people given planned support (future hires) — minus anyone
   // whose expected end has passed or whose support is all on unselected awards
+  // (a split entered in the People table overrides payroll's, and also
+  // brings back someone payroll hasn't paid lately)
   const team = [];
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
     if (person.endMonth && person.endMonth < curMonth) continue;
-    if (det && det.lastPaid && monthDiff(det.lastPaid, curMonth) <= 2
-        && shareMults(det).frac > 0) {
-      team.push({ person, det });
-    } else if (!det && (person.plannedSupport || []).length) {
-      const synth = {
+    const shares = supportShares(person, det);
+    if (!shares.length) continue;
+    let d;
+    if (det) {
+      const recent = det.lastPaid && monthDiff(det.lastPaid, curMonth) <= 2;
+      if (!recent && !hasSplitOverride(person)) continue;
+      d = { ...det, support: { month: det.support && det.support.month, shares } };
+    } else {
+      d = {
         facultySalary: false, paidMonthNums: [], salaryByProject: {},
         gra: (person.fringeRate || 0) < 0.13,  // grad-level fringe => GRA raises
-        support: { shares: person.plannedSupport.map((s) =>
-          ({ project: s.project, pct: (s.pct || 0) / 100 })) },
+        support: { shares },
       };
-      if (shareMults(synth).frac > 0) team.push({ person, det: synth });
     }
+    if (shareMults(d).frac > 0) team.push({ person, det: d });
   }
   // escalation: raises compound each August in projected months (UT and
   // GRA salary rates, plus a fees/tuition rate — editable in People).
@@ -1122,26 +1127,111 @@ function supportLabel(support) {
   return `${fmtMonth(support.month)}: ${parts.join(' · ')}`;
 }
 
-function plannedSupportCell(person) {
-  // manual people: one grant that will pay them, feeding the summary
-  // projection. Timing comes from the other columns: start someone later
-  // with salary 0 + a Pay change; stop them with Expected end.
+// Where a person's cost goes, as [{project, pct}] with pct in 0..1: the
+// split entered in the People table (person.plannedSupport, percentages)
+// when there is one, else payroll's most recent month from the export.
+function hasSplitOverride(person) {
+  return (person.plannedSupport || []).some((sh) => sh.project);
+}
+function supportShares(person, det) {
+  if (hasSplitOverride(person)) {
+    return person.plannedSupport
+      .filter((sh) => sh.project)
+      .map((sh) => ({ project: sh.project, pct: Math.max(0, sh.pct || 0) / 100 }));
+  }
+  return ((det && det.support && det.support.shares) || [])
+    .map((sh) => ({ project: sh.project, pct: Math.max(0, sh.pct || 0) }));
+}
+
+function supportCell(person, det) {
+  // The grants that pay this person, and what share of their salary each
+  // carries — one row per grant, with "+ split" to add another. Payroll
+  // people start from what the export shows and can be edited into a
+  // what-if (move them, 50/50 them); ↺ goes back to payroll. Timing comes
+  // from the other columns: start someone later with salary 0 + a Pay
+  // change; stop them with Expected end.
   const cell = el('td', { class: 'support-edit' });
-  const activeAwards = grantFilter().all;
-  const current = (person.plannedSupport || [])[0];
-  cell.append(el('select', {
-    title: 'Grant that will pay this person (100%). To start them later, set '
-      + 'salary 0 and schedule a Pay change; use Expected end to stop them.',
-    onchange: (e) => {
-      person.plannedSupport = e.target.value
-        ? [{ project: e.target.value, pct: 100 }] : [];
-      save(); renderSummary(); renderPortfolio(); renderPeople();
+  const rerender = () => { save(); renderSummary(); renderPortfolio(); renderPeople(); };
+  const overridden = hasSplitOverride(person);
+
+  if (det && !overridden) {
+    cell.append(el('div', { class: 'split-row' },
+      el('span', { class: 'muted-cell support-cell', title: supportLabel(det.support) },
+        supportLabel(det.support)),
+      el('button', {
+        class: 'btn btn-x', title: 'Change this split for the projection — move '
+          + 'them to another grant, or share them between grants',
+        onclick: () => {
+          person.plannedSupport = ((det.support && det.support.shares) || [])
+            .map((sh) => ({ project: sh.project, pct: Math.round((sh.pct || 0) * 1000) / 10 }));
+          if (!person.plannedSupport.length) person.plannedSupport = [{ project: '', pct: 100 }];
+          rerender();
+        },
+      }, 'edit')));
+    return cell;
+  }
+
+  // options: every active award, plus any award the split already names
+  // (so a share on a closed award still shows its name)
+  const options = grantFilter().all.map((a) => ({ id: a.id, name: a.shortName }));
+  const known = new Set(options.map((o) => o.id));
+  const shares = person.plannedSupport && person.plannedSupport.length
+    ? person.plannedSupport : (person.plannedSupport = [{ project: '', pct: 100 }]);
+  for (const sh of shares) {
+    if (sh.project && !known.has(sh.project)) {
+      const proj = DATA.projects.find((pp) => pp.id === sh.project);
+      options.push({ id: sh.project, name: proj ? proj.shortName : sh.project });
+      known.add(sh.project);
+    }
+  }
+
+  const total = el('span', { class: 'split-total' });
+  const updateTotal = () => {
+    const sum = shares.reduce((a, sh) => a + (sh.project ? Math.max(0, sh.pct || 0) : 0), 0);
+    const rounded = Math.round(sum * 10) / 10;
+    total.textContent = shares.length > 1 || Math.abs(sum - 100) > 0.05 ? `= ${rounded}%` : '';
+    total.classList.toggle('warn', sum > 100.05);
+    total.title = sum > 100.05
+      ? 'More than 100% of their salary — this counts them more than once'
+      : sum < 99.95
+        ? `${rounded}% of their salary is charged to your awards; the rest is paid from elsewhere`
+        : 'Whole salary charged to your awards';
+  };
+
+  const rows = shares.map((sh, idx) => el('div', { class: 'split-row' },
+    el('select', {
+      title: 'Grant that pays this share',
+      onchange: (e) => { sh.project = e.target.value; rerender(); },
     },
-  },
-    el('option', { value: '' }, '— pick a grant —'),
-    activeAwards.map((a) => el('option', {
-      value: a.id, selected: (current && a.id === current.project) || null,
-    }, a.shortName))));
+      el('option', { value: '' }, '— pick a grant —'),
+      options.map((o) => el('option', {
+        value: o.id, selected: o.id === sh.project || null,
+      }, o.name))),
+    amountInput({
+      value: sh.pct, step: 5, decimals: 1, class: 'pct-in',
+      title: 'share of their salary this grant carries',
+      onSet: (v) => {
+        sh.pct = v || 0;
+        save(); renderSummary(); renderPortfolio(); updateTotal();
+      },
+    }),
+    '%',
+    shares.length > 1 ? el('button', {
+      class: 'btn btn-x', title: 'Remove this share',
+      onclick: () => { shares.splice(idx, 1); rerender(); },
+    }, '✕') : null));
+  updateTotal();
+
+  cell.append(...rows, el('div', { class: 'split-row split-actions' },
+    el('button', {
+      class: 'btn btn-x', title: 'Add another grant to this person\'s support',
+      onclick: () => { shares.push({ project: '', pct: 0 }); rerender(); },
+    }, '+ split'),
+    total,
+    det ? el('button', {
+      class: 'btn btn-x', title: 'Back to the split payroll shows: ' + supportLabel(det.support),
+      onclick: () => { delete person.plannedSupport; rerender(); },
+    }, '↺ payroll') : null));
   return cell;
 }
 
@@ -1152,14 +1242,11 @@ function renderPeople() {
       el('th', {}, 'Name'), el('th', { class: 'num' }, 'Salary ($/mo)'),
       el('th', { class: 'num' }, 'Fringe (%)'), el('th', { class: 'num' }, 'Fees ($/yr)'),
       el('th', {}, 'Expected end'), el('th', {}, 'Pay change'),
-      el('th', {}, 'Current support'), el('th', {})));
+      el('th', {}, 'Support (grant · % of salary)'), el('th', {})));
 
   const filter = grantFilter();
-  const onSelected = (person, det) => {
-    const shares = (det && det.support && det.support.shares)
-      || (person.plannedSupport || []).map((s) => ({ project: s.project }));
-    return shares.some((sh) => filter.selectedSet.has(sh.project));
-  };
+  const onSelected = (person, det) =>
+    supportShares(person, det).some((sh) => filter.selectedSet.has(sh.project));
 
   for (const person of CFG.people) {
     const det = DATA.people.find((d) => d.name === person.name);
@@ -1219,12 +1306,7 @@ function renderPeople() {
             save(); renderSummary(); renderPortfolio();
           },
         })),
-      det
-        ? el('td', {
-            class: 'muted-cell support-cell',
-            title: supportLabel(det.support),
-          }, supportLabel(det.support))
-        : plannedSupportCell(person),
+      supportCell(person, det),
       el('td', {}, el('button', {
         class: 'btn danger btn-x', title: 'Remove person',
         onclick: () => {

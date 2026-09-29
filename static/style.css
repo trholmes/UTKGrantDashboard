@@ -200,7 +200,14 @@ td.paychange { white-space: nowrap; font-size: 12px; color: var(--muted); }
 td.name-cell { white-space: nowrap; }
 td.support-cell { max-width: 215px; overflow: hidden; text-overflow: ellipsis; }
 .btn-x { padding: 2px 8px; }
-td.support-edit select { max-width: 190px; font-size: 12px; }
+td.support-edit select { max-width: 170px; font-size: 12px; }
+td.support-edit { white-space: normal; }
+.split-row { display: flex; gap: 4px; align-items: center; margin: 2px 0; font-size: 12px; color: var(--muted); }
+.split-row .support-cell { display: inline-block; }
+.split-actions { margin-top: 3px; }
+table.people input.pct-in { width: 46px; }
+.split-total { color: var(--ink-2); }
+.split-total.warn { color: var(--critical); font-weight: 600; }
 .esc-row { color: var(--ink-2); font-size: 12.5px; margin-top: 8px; }
 input.esc-in { width: 52px; text-align: right; }
 input, select {

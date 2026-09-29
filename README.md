@@ -21,9 +21,11 @@ already pull from the university reporting system, and gives you:
 * **Hiring & departure planning in the People table** — people are seeded
   automatically from the payroll lines in your detail export, with their
   real salaries, fringe rates, and support splits. Add a person and pick
-  their grant to model a hire; set an expected end date for a graduation,
-  or a scheduled pay change — every edit flows straight into the
-  projections (salary + fringe + fees + the F&A each award charges).
+  their grant to model a hire, split anyone across grants with **+ split**
+  (a payroll split can be edited into a what-if — move a student to
+  another award, or 50/50 them — and reset); set an expected end date for
+  a graduation, or a scheduled pay change — every edit flows straight into
+  the projections (salary + fringe + fees + the F&A each award charges).
 
 ![The dashboard, showing fictional demo data](docs/screenshot.png)
 
@@ -209,6 +211,10 @@ Notes:
   and fees/tuition at 2%/yr — rates editable under the People table. A
   scheduled pay change is taken at face value for its month and escalates
   from there.
+* A person's cost is charged to awards by their **support split**: payroll's
+  latest month by default, or whatever you enter in the People table. Shares
+  below 100% in total mean the rest of their salary comes from elsewhere
+  (a half-time appointment, a departmental TA line); over 100% is flagged.
 * You can layer in things the reporting system doesn't know yet, and they
   feed the portfolio summary's funded-through projection: **expected new
   funding** per award (on its card, with the expected new end date —
