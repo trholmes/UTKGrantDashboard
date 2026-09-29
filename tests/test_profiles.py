@@ -102,14 +102,14 @@ class Folders(unittest.TestCase):
         self.assertEqual(by_name["Doe, Jane"]["files"], 0)
 
     def test_profile_info_names_the_current_folder(self):
-        (self.root / "Holmes").mkdir()
+        dashboard.create_profile(self.root, "Holmes")
         info = dashboard.profile_info(self.root, self.root / "Holmes")
         self.assertEqual(info["current"], "Holmes")
         self.assertEqual(info["root"]["name"], self.root.name)
         self.assertEqual(dashboard.profile_info(self.root, self.root)["current"], "")
 
     def test_report_source_falls_through_from_the_data_folder(self):
-        (self.root / "Holmes").mkdir()
+        dashboard.create_profile(self.root, "Holmes")
         (self.root / "report_source.json").write_text('{"template": "RPT9"}')
         self.assertEqual(dashboard.load_report_source(self.root / "Holmes", self.root)["template"],
                          "RPT9")
@@ -126,8 +126,10 @@ class WhoseExport(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "data"
         self.inbox = Path(self.tmp.name) / "Downloads"
-        for d in (self.root, self.root / "Holmes", self.root / "Lee", self.inbox):
+        for d in (self.root, self.inbox):
             d.mkdir()
+        dashboard.create_profile(self.root, "Holmes")
+        dashboard.create_profile(self.root, "Lee")
         dashboard_export(self.root / "Holmes" / "PI Dashboard.csv", "Holmes, T",
                          ["SPN900001", "SPN900002"])
         dashboard_export(self.root / "Lee" / "PI Dashboard.csv", "Lee, L", ["SPN900003"])
@@ -183,8 +185,9 @@ class Routes(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "data"
         self.inbox = Path(self.tmp.name) / "Downloads"
-        for d in (self.root, self.root / "Holmes", self.inbox):
+        for d in (self.root, self.inbox):
             d.mkdir()
+        dashboard.create_profile(self.root, "Holmes")
         shutil.copy(FIXTURE, self.root / "Holmes" / "dash.csv")
         self.server = ThreadingHTTPServer(
             ("127.0.0.1", 0), dashboard.make_handler(self.root, self.inbox))

@@ -113,7 +113,11 @@ Notes:
 ## Getting the data
 
 Two reports feed the dashboard. Any filename ending in `.csv` works — the
-tool identifies each file by its columns, so don't worry about renaming.
+tool identifies each file by its header row, so don't worry about renaming
+(a title row above the header, UTF-16, or tabs instead of commas are fine
+too). A file in `data/` or in Downloads that is *not* one of the two
+exports is never ignored quietly: the page names it and says why — an
+Excel workbook, the Award Summary tab, an unrelated CSV.
 
 **The short version:** open **Get fresh data** in the dashboard header. It
 builds a link that downloads the detail report for your projects in one
@@ -129,9 +133,19 @@ projections to anchor to.
 
 1. Open the [PI Dashboard](https://oaxfdiprod-idabxacptyfb-ia.analytics.ocp.oraclecloud.com/ui/dv/?pageid=visualAnalyzer&reportmode=full&reportpath=%2F%40Catalog%2Fshared%2FUT%2FFIN%2FPI%2FPI%20Dashboard)
    in Oracle Analytics.
-2. Navigate to **Project Summary**.
+2. Navigate to the **Project Summary** tab — not *Award Summary*. The
+   dashboard works per project (the `SPN…` numbers, which also key the
+   detail report); an Award Summary export starts with *Award Number* and
+   rolls several projects into one row, so it is named on the page as
+   the wrong tab rather than read.
 3. Enter your name in **Project PI / Manager**.
-4. Export the Project Summary table as **CSV** and drop it in `data/`.
+4. Export the Project Summary table as **CSV** (Export → Data → CSV, not
+   the Excel workbook). If you opened the PI Dashboard from the
+   dashboard's *Get fresh data* step 1, the export shows up under that
+   step when it lands in Downloads, with an **Import** button (or is
+   imported for you, with *Import new exports automatically* on), and
+   the page moves on to step 2; otherwise drop it in `data/` yourself.
+   Step 2 lists the projects it names, so it comes first.
 
 ### 2. Expenditure detail report — strongly recommended
 
@@ -155,7 +169,8 @@ dashboard, open **Get fresh data** (button in the header):
    CSV straight to your Downloads folder.
 4. The dashboard notices the new file and imports it into `data/` for you
    (untick *Import new exports automatically* if you'd rather press the
-   Import button yourself).
+   Import button under step 2 yourself). Each step also confirms which
+   of its exports the data folder already holds.
 
 If nothing downloads, expand *Nothing downloaded, or using Safari?*: it
 gives you the raw URL to paste into the logged-in tab's address bar, and a
@@ -214,16 +229,17 @@ scenarios and overrides (`config.json`), all separate.
   including *Get fresh data*, to that PI. The page's address carries the
   choice (`?pi=Holmes`), so a browser tab per PI works too.
 * **Getting a PI's exports in:** switch to their folder first. Step 1
-  opens the PI Dashboard where you enter *that* PI's name; step 2's
-  download link covers the projects in that folder; step 3 imports the
-  download into that folder. Nothing is ever moved between folders, and
-  `data/config.json`-style scenario edits save into the PI's folder.
+  opens the PI Dashboard where you enter *that* PI's name and imports
+  the export into that folder; step 2's download link covers the
+  projects in that folder and imports the detail report the same way.
+  Nothing is ever moved between folders, and `data/config.json`-style
+  scenario edits save into the PI's folder.
 * **Whose file is this?** The Downloads folder is shared, and the
-  reporting system names every export the same way. Step 3 reads the PI
-  name inside a PI Dashboard export, and the project numbers inside a
-  detail export, and matches them against what each PI folder already
-  holds: a file that belongs to another PI is labelled *looks like
-  Lee's* with an **Import into data/Lee** button, is never imported
+  reporting system names every export the same way. The import lists
+  read the PI name inside a PI Dashboard export, and the project numbers
+  inside a detail export, and match them against what each PI folder
+  already holds: a file that belongs to another PI is labelled *looks
+  like Lee's* with an **Import into data/Lee** button, is never imported
   automatically into the wrong folder, and a file already sitting in
   another folder says so.
 * `report_source.json` in `data/` applies to every PI folder; one inside

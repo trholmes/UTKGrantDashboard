@@ -88,6 +88,7 @@ h3 { font-size: 14px; margin: 0; }
   border: 1px solid var(--grid); border-radius: 99px; padding: 1px 9px; margin-left: 6px;
 }
 .pi-switch { font-size: 13px; color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+.pi-switch[hidden], .pi-name[hidden] { display: none; }
 .pi-switch select {
   font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
   border: 1px solid var(--baseline); border-radius: 7px; padding: 4px 8px; max-width: 24ch;
@@ -106,6 +107,15 @@ h3 { font-size: 14px; margin: 0; }
   background: var(--surface); border: 1px solid var(--critical);
   border-radius: 10px; padding: 12px 16px; margin-top: 18px;
 }
+.notice {
+  background: var(--surface); border: 1px solid var(--warning);
+  border-radius: 10px; padding: 10px 16px; margin-top: 18px; font-size: 13px;
+}
+.notice-head { font-weight: 600; margin-bottom: 4px; }
+.notice-row { margin: 3px 0; color: var(--ink-2); }
+.notice-row b { color: var(--ink); }
+.inbox-row.unrecognized .inbox-name { color: var(--ink-2); }
+.inbox-reason { color: var(--ink-2); flex-basis: 100%; }
 
 /* ---- flags ---- */
 #flags { display: flex; flex-direction: column; gap: 6px; }
@@ -335,6 +345,10 @@ input.extra-in, input.tpl-in { font-size: 12.5px; }
 input.url-box { width: 100%; font-size: 11.5px; color: var(--ink-2); }
 .btn.bookmarklet { border-color: var(--series-3); color: var(--series-3); cursor: grab; }
 
+.getdata-step.just-now { border-color: var(--series-1); transition: border-color 1.5s; }
+.inbox-block { margin-top: 12px; }
+.inbox-block .hint { margin-bottom: 4px; }
+.have-note { color: var(--good-text); font-size: 12.5px; margin-bottom: 4px; }
 .inbox-row {
   display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
   padding: 7px 0; border-top: 1px solid var(--grid); font-size: 12.5px;
