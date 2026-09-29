@@ -123,6 +123,7 @@ h3 { font-size: 14px; margin: 0; }
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 9px; padding: 8px 12px;
 }
+.grant-filter-all { margin-left: auto; align-self: center; }
 tr.filtered-out { opacity: 0.45; }
 .check { color: var(--ink-2); font-size: 12.5px; user-select: none; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 14px; }

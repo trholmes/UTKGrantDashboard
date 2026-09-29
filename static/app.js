@@ -235,7 +235,9 @@ function renderSummary() {
     return;
   }
 
-  // checkbox chips: which awards feed this summary (and show as cards)
+  // checkbox chips: which awards feed this summary (and show as cards),
+  // with a one-click all/none toggle
+  const allOn = filter.selected.length === filter.all.length;
   box.append(el('div', { class: 'grant-filter' },
     filter.all.map((p) => el('label', { class: 'check' },
       el('input', {
@@ -246,7 +248,15 @@ function renderSummary() {
           CFG.ui.excluded = [...ex];
           save(); renderAll();
         },
-      }), ` ${p.shortName}`))));
+      }), ` ${p.shortName}`)),
+    filter.all.length > 1 ? el('button', {
+      class: 'btn btn-x grant-filter-all',
+      title: allOn ? 'Untick every award' : 'Tick every award',
+      onclick: () => {
+        CFG.ui.excluded = allOn ? filter.all.map((p) => p.id) : [];
+        save(); renderAll();
+      },
+    }, allOn ? 'Select none' : 'Select all') : null));
   if (missingNote) box.append(missingNote);
 
   const active = filter.selected;
