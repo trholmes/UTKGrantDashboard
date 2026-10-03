@@ -11,3 +11,4 @@ __pycache__/
 
 # Salary reconciliation: fictional demo reports (recreate with make_demo.py)
 salary_reconciliation/demo/
+salary_reconciliation/diagnostic.txt
