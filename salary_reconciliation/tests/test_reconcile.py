@@ -10,6 +10,7 @@ import http.client
 import io
 import json
 import os
+import struct
 import sys
 import tempfile
 import threading
@@ -23,7 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import make_demo  # noqa: E402
 import reconcile  # noqa: E402
 import server  # noqa: E402
+import xls  # noqa: E402
 import xlsx  # noqa: E402
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 A, B, C, D = make_demo.A, make_demo.B, make_demo.C, make_demo.D
 
@@ -131,6 +135,13 @@ class DataFolder(unittest.TestCase):
         self.assertIn(reconcile.LD, found)
         self.assertIn("read as Labor Distribution", " ".join(notes))
 
+    def test_xls_is_read_and_unreadable_types_are_named(self):
+        self.put("DetailBalances_3.xls", (FIXTURES / "detail_balances_demo.xls").read_bytes())
+        self.put("Labor Distribution Report.pdf", b"%PDF")
+        found, notes = reconcile.load_folder(self.dir)
+        self.assertEqual(found[reconcile.GL][0], "DetailBalances_3.xls")
+        self.assertIn(".pdf isn't a format this reads", " ".join(notes))
+
     def test_missing_folder(self):
         self.assertEqual(reconcile.find_reports(self.dir / "nope"), ([], []))
 
@@ -225,6 +236,124 @@ class Xlsx(unittest.TestCase):
         names = zipfile.ZipFile(io.BytesIO(book)).read("xl/workbook.xml").decode()
         for sheet in ("Summary", "Labor Distribution sorted", "Differences", "Not compared"):
             self.assertIn(sheet, names)
+
+
+def _rec(rtype, data):
+    return struct.pack("<HH", rtype, len(data)) + data
+
+
+def tiny_biff():
+    """A minimal Excel 97 workbook stream, small enough to live in the OLE
+    mini-stream, whose shared strings split across CONTINUE records the two
+    awkward ways: mid-string switching to 16-bit characters, and right after
+    a string's header."""
+    sst = _rec(xls.SST, struct.pack("<II", 2, 2) + struct.pack("<HB", 6, 0) + b"abc")
+    sst += _rec(xls.CONTINUE, b"\x01" + "déf".encode("utf-16-le") + struct.pack("<HB", 2, 0))
+    sst += _rec(xls.CONTINUE, b"\x00xy")
+    bof = lambda dt: _rec(xls.BOF, struct.pack("<HH", 0x0600, dt) + bytes(12))
+    sheet_name = b"Sheet1"
+
+    def globals_(pos):
+        return (bof(0x0005) + sst
+                + _rec(xls.BOUNDSHEET, struct.pack("<IBB", pos, 0, 0) + bytes([len(sheet_name), 0]) + sheet_name)
+                + _rec(xls.EOF, b""))
+    head = globals_(0)
+    sheet = (bof(0x0010)
+             + _rec(xls.LABELSST, struct.pack("<HHHI", 0, 0, 0, 0))
+             + _rec(xls.LABELSST, struct.pack("<HHHI", 0, 1, 0, 1))
+             + _rec(xls.LABEL, struct.pack("<HHH", 0, 2, 0) + struct.pack("<HB", 4, 0) + b"Fund")
+             + _rec(xls.NUMBER, struct.pack("<HHHd", 1, 0, 0, 1100001.0))
+             + _rec(xls.RK, struct.pack("<HHHI", 1, 1, 0, (497582 << 2) | 0x03))  # 4975.82
+             + _rec(xls.MULRK, struct.pack("<HH", 2, 0) + struct.pack("<HI", 0, (-7 << 2 & 0xFFFFFFFF) | 0x02)
+                    + struct.pack("<HI", 0, (12 << 2) | 0x02) + struct.pack("<H", 1))
+             + _rec(xls.EOF, b""))
+    return globals_(len(head)) + sheet
+
+
+def tiny_ole(stream, name="Workbook"):
+    """An OLE2 container (512-byte sectors) holding one small stream in its
+    mini-stream."""
+    FREE, END = 0xFFFFFFFF, 0xFFFFFFFE
+    mini = stream + bytes(-len(stream) % 64)
+    m = len(mini) // 64
+    ministream = mini + bytes(-len(mini) % 512)
+    k = len(ministream) // 512
+    fat = [0xFFFFFFFD, END, END] + [3 + i + 1 for i in range(k - 1)] + [END]
+    fat += [FREE] * (128 - len(fat))
+    minifat = [i + 1 for i in range(m - 1)] + [END]
+    minifat += [FREE] * (128 - len(minifat))
+
+    def entry(ename, etype, start, size, child=FREE):
+        n = (ename + "\0").encode("utf-16-le")
+        return (n + bytes(64 - len(n)) + struct.pack("<HBB", len(n), etype, 1)
+                + struct.pack("<III", FREE, FREE, child) + bytes(36)
+                + struct.pack("<III", start, size, 0))
+    directory = (entry("Root Entry", 5, 3, len(mini), child=1) + entry(name, 2, 0, len(stream))
+                 + bytes(256))
+    header = (xls.OLE_MAGIC + bytes(16) + struct.pack("<HHHHH", 0x3E, 3, 0xFFFE, 9, 6) + bytes(6)
+              + struct.pack("<IIIIIIIII", 0, 1, 1, 0, 4096, 2, 1, END, 0)
+              + struct.pack("<I", 0) + struct.pack("<108I", *[FREE] * 108))
+    return (header + struct.pack("<128I", *fat) + directory
+            + struct.pack("<128I", *minifat) + ministream)
+
+
+class XlsFormats(unittest.TestCase):
+    """Everything an export named .xls can turn out to be."""
+
+    def test_excel_97_workbook(self):
+        data = (FIXTURES / "detail_balances_demo.xls").read_bytes()
+        self.assertEqual(xls.kind(data), "biff")
+        found, notes = reconcile.load([("DetailBalances.xls", data),
+                                       ("ld.csv", make_demo.ld_csv())])
+        self.assertEqual(notes, [])
+        from_xls = reconcile.reconcile_files(found)
+        from_xlsx, _ = run_demo((reconcile.LD, reconcile.GL))
+        self.assertEqual([(r["combo"], r["gl_total"], r["status"]) for r in from_xls["rows"]],
+                         [(r["combo"], r["gl_total"], r["status"]) for r in from_xlsx["rows"]])
+
+    def test_shared_strings_across_continue_records(self):
+        rows = xls.read_rows((FIXTURES / "long_strings.xls").read_bytes())
+        self.assertEqual(len(rows), 802)
+        self.assertEqual(rows[7][1], "row 7 abcdefghij abcdefghij abcdefghij "
+                                     "abcdefghij abcdefghij Café ü 日本")
+        self.assertEqual(rows[5][2:], ["08/06/2026", "6.25"])
+        self.assertEqual(rows[6][3], "-6")
+        self.assertEqual(rows[801][1], "é日" * 2000 + "x" * 9000)
+        self.assertEqual(rows[800][0], "800")
+
+    def test_small_workbook_in_the_mini_stream(self):
+        rows = xls.read_rows(tiny_ole(tiny_biff()))
+        self.assertEqual(rows, [["abcdéf", "xy", "Fund"], ["1100001", "4975.82"], ["-7", "12"]])
+
+    def test_excel_95_is_named(self):
+        stream = _rec(xls.BOF, struct.pack("<HH", 0x0500, 5) + bytes(4))
+        with self.assertRaisesRegex(ValueError, "Excel 95"):
+            xls.read_rows(tiny_ole(stream, "Book"))
+
+    def test_xml_spreadsheet_2003(self):
+        data = """<?xml version="1.0"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Worksheet ss:Name="Sheet1"><Table>
+  <Row><Cell><Data ss:Type="String">Fund</Data></Cell><Cell ss:Index="3"><Data ss:Type="String">Date</Data></Cell></Row>
+  <Row ss:Index="3"><Cell ss:MergeAcross="1"><Data ss:Type="Number">1100001</Data></Cell>
+   <Cell><Data ss:Type="DateTime">2026-08-01T00:00:00.000</Data></Cell></Row>
+ </Table></Worksheet></Workbook>""".encode()
+        self.assertEqual(xls.kind(data), "xml2003")
+        self.assertEqual(xls.read_rows(data), [["Fund", "", "Date"], ["1100001", "", "08/01/2026"]])
+
+    def test_html_table(self):
+        data = b"""<html><head><meta charset="utf-8"></head><body>
+<table><tr><th>Fund</th><th colspan="2">Account &amp; Program</th><th>Amount</th></tr>
+<tr><td>1100001</td><td>512100</td><td>210</td><td>4,975.82&nbsp;</td></tr>
+<tr><td></td><td></td><td></td><td></td></tr></table></body></html>"""
+        self.assertEqual(xls.kind(data), "html")
+        self.assertEqual(xls.read_rows(data), [["Fund", "Account & Program", "", "Amount"],
+                                               ["1100001", "512100", "210", "4,975.82"]])
+
+    def test_csv_or_xlsx_named_xls_are_read_by_content(self):
+        self.assertIsNone(xls.kind(make_demo.ld_csv()))
+        self.assertEqual(reconcile.identify(make_demo.gl_xlsx())[0], reconcile.GL)
 
 
 class Server(unittest.TestCase):

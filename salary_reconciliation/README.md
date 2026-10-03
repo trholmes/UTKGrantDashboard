@@ -47,9 +47,13 @@ folder every time the page opens. Each report is found by its name:
 | DetailBalances | `DetailBalances` — e.g. `DetailBalances_3.xlsx` |
 | Fund Line Items | `Fund Line Items` — e.g. `Fund_Line_Items_-_3_Segments_Fund_Line.xlsx` |
 
-Capitals, spaces, underscores and dashes don't matter, and CSV or Excel
-both work, so the names the reporting system gives its exports work as
-they are. Old exports can stay in the folder: the newest file of each report
+Capitals, spaces, underscores and dashes don't matter, so the names the
+reporting system gives its exports work as they are. CSV, `.xlsx` and `.xls`
+all work — including the things reporting systems save under an `.xls` name
+(an old-style Excel 97-2003 workbook, Excel 2003 XML, an HTML table, or
+plain CSV text): each file is read by what's inside it, not its extension.
+A file named like one of the reports but in a format this can't read (a
+PDF, say) is named on the page rather than skipped silently. Old exports can stay in the folder: the newest file of each report
 is used, and the page says which ones it skipped. Files whose names match
 none of the three are named on the page and skipped. If a file's columns
 turn out to be a different report than its name says, the columns win and
@@ -139,6 +143,7 @@ python -m unittest discover tests   # run from this folder
 | --- | --- |
 | `reconcile.py` | Reads the reports and lines them up; also a command-line tool. |
 | `xlsx.py` | Reads and writes `.xlsx` with the standard library. |
+| `xls.py` | Reads the formats that go by `.xls` with the standard library. |
 | `server.py` | The local web server behind the page. |
 | `static/` | The page itself. |
 | `make_demo.py` | Writes fictional reports in the real layouts. |

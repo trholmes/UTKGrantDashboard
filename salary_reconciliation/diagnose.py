@@ -58,7 +58,10 @@ def main(paths):
     for p in paths:
         data = Path(p).read_bytes()
         kind, at, rows = rc.identify(data)
-        say(f"FILE {Path(p).suffix or '(no extension)'}: "
+        fmt = ("Excel .xlsx" if rc.xlsx.is_xlsx(data)
+               else {"biff": "Excel 97-2003", "xml2003": "Excel 2003 XML",
+                     "html": "HTML table"}.get(rc.xls.kind(data), "text (CSV/TSV)"))
+        say(f"FILE {Path(p).suffix or '(no extension)'} ({fmt} inside): "
             f"{rc.KIND_NAMES.get(kind, 'NOT RECOGNIZED')}, header on row {at}, "
             f"{len(rows)} rows in all")
         if kind:

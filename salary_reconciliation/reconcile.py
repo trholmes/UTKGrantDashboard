@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import xls  # noqa: E402
 import xlsx  # noqa: E402
 
 # The eight segments of a chart-of-accounts string such as
@@ -135,9 +136,13 @@ def _decode(data):
 
 
 def read_table(data):
-    """Rows of text from a CSV/TSV or .xlsx file's bytes."""
+    """Rows of text from a file's bytes: .xlsx, any of the formats that go by
+    .xls, or CSV/TSV text. Decided by the contents, not the name — an
+    export called .xls is often one of the others."""
     if xlsx.is_xlsx(data):
         return xlsx.read_rows(data)
+    if xls.kind(data):
+        return xls.read_rows(data)
     text = _decode(data)
     first = text.split("\n", 1)[0]
     delim = "\t" if first.count("\t") > first.count(",") else ","
@@ -467,7 +472,7 @@ def load(files):
 # "Labor_Distribution_Report (2).csv", "DetailBalances_3.xlsx",
 # "Fund Line Items - 3 Segments Fund Line.xlsx".
 NAME_PATTERNS = {LD: "labordistribution", GL: "detailbalance", FLI: "fundlineitem"}
-REPORT_SUFFIXES = (".csv", ".txt", ".xlsx")
+REPORT_SUFFIXES = (".csv", ".txt", ".xlsx", ".xls")
 
 
 def kind_by_name(filename):
@@ -486,10 +491,15 @@ def find_reports(folder):
     if not folder.is_dir():
         return [], notes
     for p in sorted(folder.iterdir()):
-        if (not p.is_file() or p.name.startswith(("~$", "."))
-                or p.suffix.lower() not in REPORT_SUFFIXES):
+        if not p.is_file() or p.name.startswith(("~$", ".")):
             continue
         kind = kind_by_name(p.name)
+        if p.suffix.lower() not in REPORT_SUFFIXES:
+            if kind is not None:
+                notes.append(f"{p.name}: looks like the {KIND_NAMES[kind]} report, "
+                             f"but {p.suffix or 'a file without an extension'} isn't "
+                             f"a format this reads — export it as Excel or CSV.")
+            continue
         if kind is None:
             notes.append(f"{p.name}: the name doesn't say which report it is "
                          f"(expected Labor Distribution, DetailBalances or "

@@ -64,6 +64,13 @@ def _shared_strings(z):
     return out
 
 
+def is_date_format(code):
+    """Whether a custom number format shows a date ('mm/dd/yyyy',
+    'd-mmm-yy'); quoted text and [colour]/[$-409] parts don't count."""
+    code = re.sub(r'"[^"]*"|\[[^\]]*\]', "", code).lower()
+    return bool(re.search(r"[dy]", code) or re.search(r"m{3,}", code))
+
+
 def _date_styles(z):
     """Indexes of the cell styles (the c/@s attribute) that show a date."""
     if "xl/styles.xml" not in z.namelist():
@@ -71,8 +78,7 @@ def _date_styles(z):
     root = ET.fromstring(z.read("xl/styles.xml"))
     date_fmts = set(_DATE_FORMAT_IDS)
     for fmt in root.iter(f"{NS}numFmt"):
-        code = re.sub(r'"[^"]*"|\[[^\]]*\]', "", fmt.get("formatCode", "")).lower()
-        if re.search(r"[dy]", code) or re.search(r"m{3,}", code):
+        if is_date_format(fmt.get("formatCode", "")):
             date_fmts.add(int(fmt.get("numFmtId")))
     xfs = root.find(f"{NS}cellXfs")
     if xfs is None:
@@ -81,12 +87,15 @@ def _date_styles(z):
             if int(xf.get("numFmtId", "0")) in date_fmts}
 
 
-def _serial_to_date(v):
+def serial_to_date(v, date1904=False):
+    """An Excel date serial -> 'MM/DD/YYYY' (text that isn't a number
+    comes back unchanged)."""
     try:
         days = float(v)
     except ValueError:
         return v
-    d = date(1899, 12, 30) + timedelta(days=int(days))
+    d = date(1904 if date1904 else 1899, 1 if date1904 else 12,
+             1 if date1904 else 30) + timedelta(days=int(days))
     return d.strftime("%m/%d/%Y")
 
 
@@ -115,7 +124,7 @@ def read_rows(data):
                 elif t == "b":
                     val = "TRUE" if v.text == "1" else "FALSE"
                 elif c.get("s") and int(c.get("s")) in date_styles:
-                    val = _serial_to_date(v.text)
+                    val = serial_to_date(v.text)
                 else:
                     val = v.text
                 cells[_col_index(c.get("r", "A"))] = val

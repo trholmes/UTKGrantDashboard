@@ -9,8 +9,8 @@ on the page (it also reads this folder whenever the page opens):
 | DetailBalances | `DetailBalances` (e.g. `DetailBalances_3.xlsx`) |
 | Fund Line Items | `Fund Line Items` (e.g. `Fund_Line_Items_-_3_Segments_Fund_Line.xlsx`) |
 
-Capitals, spaces, underscores and dashes don't matter, and CSV or Excel
-both work. Old exports can stay: the newest file of each report is used,
+Capitals, spaces, underscores and dashes don't matter, and CSV, `.xlsx` or
+`.xls` all work. Old exports can stay: the newest file of each report is used,
 and the page says which ones it skipped.
 
 Everything in this folder except this README is git-ignored, so payroll
