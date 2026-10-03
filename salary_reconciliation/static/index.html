@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Salary Reconciliation</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <h1>Salary Reconciliation</h1>
+    <div class="subtitle">Labor Distribution vs. the General Ledger, by person and by account</div>
+  </div>
+  <div class="topbar-actions">
+    <button id="export-btn" class="btn primary" disabled title="Summary, the sorted Labor Distribution with subtotals, and every difference">Download Excel</button>
+    <button id="reload-btn" class="btn" title="Read the newest reports in the data folder again">Reload data folder</button>
+    <button id="clear-btn" class="btn" title="Forget the loaded reports">Start over</button>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Reports</h2>
+    <p class="hint">Save the exports into the data folder — <span id="data-dir" class="mono"></span> — and click <strong>Reload data folder</strong>. Each report is found by its name (the newest one wins if there are several). CSV or Excel both work. You can also drag files onto this page; those stay in memory only.</p>
+    <div class="slots">
+      <div class="slot" data-kind="labor_distribution">
+        <div class="slot-step">1</div>
+        <div class="slot-body">
+          <div class="slot-title">Labor Distribution</div>
+          <div class="slot-what">What payroll charged to each account combination</div>
+          <div class="slot-file"></div>
+        </div>
+      </div>
+      <div class="slot" data-kind="detail_balances">
+        <div class="slot-step">2</div>
+        <div class="slot-body">
+          <div class="slot-title">DetailBalances</div>
+          <div class="slot-what">What the ledger shows for each GL code</div>
+          <div class="slot-file"></div>
+        </div>
+      </div>
+      <div class="slot" data-kind="fund_line_items">
+        <div class="slot-step">3</div>
+        <div class="slot-body">
+          <div class="slot-title">Fund Line Items</div>
+          <div class="slot-what">The ledger's lines — finds what's missing where totals differ</div>
+          <div class="slot-file"></div>
+        </div>
+      </div>
+    </div>
+    <label class="btn pick">Choose files…<input type="file" id="file-input" multiple accept=".csv,.txt,.xlsx,.xls" hidden></label>
+    <span id="busy" class="busy" hidden>Reading…</span>
+    <div id="notes"></div>
+  </section>
+
+  <section id="results" hidden>
+    <div class="seg views" id="view-tabs" role="tablist" aria-label="View">
+      <button data-view="people" class="on" title="Each person's Labor Distribution against what the ledger posted for them">By person</button>
+      <button data-view="accounts" title="Each account combination's Labor Distribution total against DetailBalances">By account</button>
+    </div>
+    <div id="tiles" class="tiles"></div>
+    <div id="period-note" class="note"></div>
+    <div class="controls">
+      <div class="seg" id="filter-seg" role="group" aria-label="Show">
+        <button data-filter="all" class="on">All</button>
+        <button data-filter="problems">Differences only</button>
+      </div>
+      <label class="period-pick">Period
+        <select id="period-select"><option value="">All</option></select>
+      </label>
+      <input type="search" id="search" placeholder="Filter by person, fund, account…">
+      <button id="expand-all" class="btn small">Expand all</button>
+    </div>
+    <div id="people-view">
+      <div class="table-wrap">
+        <table id="people">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Person</th>
+              <th class="num">Labor Distribution</th>
+              <th class="num">Ledger</th>
+              <th class="num">Difference</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+      <div id="unattributed"></div>
+    </div>
+    <div id="accounts-view" hidden>
+      <div class="table-wrap">
+        <table id="summary">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Account combination</th>
+              <th>Period</th>
+              <th class="num">Labor Distribution</th>
+              <th class="num">DetailBalances</th>
+              <th class="num">Difference</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+    </div>
+    <div id="leftovers"></div>
+  </section>
+</main>
+
+<div id="drop-overlay" hidden><div>Drop the reports to load them</div></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
