@@ -28,7 +28,6 @@ import csv
 import io
 import re
 import sys
-from collections import Counter
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -280,7 +279,6 @@ def parse_fli(rows, at):
             "ref": _clean(r.get("Ref Doc")),
             "user": _clean(r.get("User Name")),
             "record": _clean(r.get("Record No.")),
-            "record_type": _clean(r.get("Record Type")),
         })
     return lines
 
@@ -455,7 +453,6 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
         "counts": counts,
         "people_not_in_ld": len(missing_people),
         "people": people,
-        "people_counts": dict(Counter(p["status"] for p in people)),
         "unattributed": unattributed,
         "outside_periods": sorted(outside, key=lambda l: (l["combo"], _ld_sort_key(l))),
         "excluded": sorted(excluded, key=lambda l: (l["combo"], _ld_sort_key(l))),
