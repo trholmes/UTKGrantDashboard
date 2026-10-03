@@ -52,6 +52,19 @@ async function refresh() {
   render();
 }
 
+async function loadFolder() {
+  $("#busy").hidden = false;
+  $("#busy").textContent = "Reading the data folder…";
+  try {
+    const r = await api("/api/load-folder", { method: "POST" });
+    open.clear();
+    await refresh();
+    renderNotes(r.notes);
+  } finally {
+    $("#busy").hidden = true;
+  }
+}
+
 async function addFiles(files) {
   if (!files.length) return;
   $("#busy").hidden = false;
@@ -78,6 +91,7 @@ function renderNotes(notes) {
 }
 
 function renderSlots() {
+  $("#data-dir").textContent = state.data_dir || "";
   document.querySelectorAll(".slot").forEach((el) => {
     const f = state.files[el.dataset.kind];
     el.classList.toggle("loaded", !!f);
@@ -292,6 +306,8 @@ document.querySelector(".slots").addEventListener("click", async (e) => {
   refresh();
 });
 
+$("#reload-btn").addEventListener("click", () => loadFolder().catch((e) => renderNotes([e.message])));
+
 $("#clear-btn").addEventListener("click", async () => {
   await api("/api/clear", { method: "POST" });
   open.clear();
@@ -327,4 +343,4 @@ $("#expand-all").addEventListener("click", () => {
   renderTable();
 });
 
-refresh().catch((e) => renderNotes([e.message]));
+loadFolder().catch((e) => renderNotes([e.message]));

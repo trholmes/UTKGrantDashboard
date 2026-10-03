@@ -20,6 +20,7 @@ are tied to Labor Distribution lines by Ref Doc = Transaction Number.
 Standard library only. Also usable without the browser page:
 
     python reconcile.py LD.csv DetailBalances.xlsx FundLineItems.xlsx -o out.xlsx
+    python reconcile.py -o out.xlsx       # the newest reports in data/
 """
 
 import argparse
@@ -53,6 +54,7 @@ SIGNATURES = {
     FLI: ("FI_DocNo", "GL Account", "Amount", "Ref Doc"),
 }
 HEADER_SEARCH_ROWS = 30
+DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
 class ReportError(ValueError):
@@ -461,6 +463,63 @@ def load(files):
     return found, notes
 
 
+# What each report's export is called, squeezed to letters and digits:
+# "Labor_Distribution_Report (2).csv", "DetailBalances_3.xlsx",
+# "Fund Line Items - 3 Segments Fund Line.xlsx".
+NAME_PATTERNS = {LD: "labordistribution", GL: "detailbalance", FLI: "fundlineitem"}
+REPORT_SUFFIXES = (".csv", ".txt", ".xlsx")
+
+
+def kind_by_name(filename):
+    squeezed = re.sub(r"[^a-z0-9]", "", filename.lower())
+    return next((k for k, p in NAME_PATTERNS.items() if p in squeezed), None)
+
+
+def find_reports(folder):
+    """Pick the newest file of each report in a folder, by filename.
+
+    Returns ([paths], notes). Excel's lock files (~$...) and other file
+    types are skipped; a name that matches no report is mentioned, so a
+    renamed export doesn't go missing silently."""
+    folder = Path(folder)
+    candidates, notes = {}, []
+    if not folder.is_dir():
+        return [], notes
+    for p in sorted(folder.iterdir()):
+        if (not p.is_file() or p.name.startswith(("~$", "."))
+                or p.suffix.lower() not in REPORT_SUFFIXES):
+            continue
+        kind = kind_by_name(p.name)
+        if kind is None:
+            notes.append(f"{p.name}: the name doesn't say which report it is "
+                         f"(expected Labor Distribution, DetailBalances or "
+                         f"Fund Line Items in it) — skipped.")
+            continue
+        candidates.setdefault(kind, []).append(p)
+    newest = {}
+    for kind, paths in candidates.items():
+        newest[kind] = max(paths, key=lambda p: p.stat().st_mtime)
+        older = [p.name for p in paths if p != newest[kind]]
+        if older:
+            notes.append(f"Using {newest[kind].name}, the newest {KIND_NAMES[kind]} "
+                         f"file; ignoring {', '.join(older)}.")
+    return [newest[k] for k in (LD, GL, FLI) if k in newest], notes
+
+
+def load_folder(folder):
+    """Like load(), for the reports find_reports() picks in a folder. A file
+    whose contents turn out to be a different report than its name says is
+    used as what its contents say, with a note."""
+    paths, notes = find_reports(folder)
+    found, load_notes = load([(p.name, p.read_bytes()) for p in paths])
+    for kind, (name, _) in found.items():
+        named = kind_by_name(name)
+        if named != kind:
+            notes.append(f"{name}: named like {KIND_NAMES[named]}, but its columns "
+                         f"are a {KIND_NAMES[kind]} report — read as {KIND_NAMES[kind]}.")
+    return found, notes + load_notes
+
+
 def reconcile_files(found):
     if LD not in found:
         return None
@@ -578,11 +637,15 @@ def export_workbook(result, sources=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("files", nargs="+", type=Path,
-                    help="the exports, in any order (CSV or .xlsx)")
+    ap.add_argument("files", nargs="*", type=Path,
+                    help="the exports, in any order (CSV or .xlsx); "
+                         "default: the newest of each in the data folder")
     ap.add_argument("-o", "--output", type=Path, default=Path("Salary reconciliation.xlsx"))
     args = ap.parse_args()
-    found, notes = load([(p.name, p.read_bytes()) for p in args.files])
+    if args.files:
+        found, notes = load([(p.name, p.read_bytes()) for p in args.files])
+    else:
+        found, notes = load_folder(DATA_DIR)
     for n in notes:
         print(n)
     result = reconcile_files(found)

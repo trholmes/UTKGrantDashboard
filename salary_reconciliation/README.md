@@ -35,9 +35,26 @@ On a Mac or Linux: `python3 server.py`.
 
 ## Using it
 
-Export the three reports (CSV or Excel — either works, and the filenames
-don't matter) and drag them onto the page, or click **Choose files…**. Each
-file is recognized by its column headings, so they can go in any order.
+Save the three exports into the **`data`** folder in this folder, and start
+the tool (or click **Reload data folder** if it's already open). It reads the
+folder every time the page opens. Each report is found by its name:
+
+| Report | Name contains |
+| --- | --- |
+| Labor Distribution | `Labor Distribution` — e.g. `Labor_Distribution_Report.csv` |
+| DetailBalances | `DetailBalances` — e.g. `DetailBalances_3.xlsx` |
+| Fund Line Items | `Fund Line Items` — e.g. `Fund_Line_Items_-_3_Segments_Fund_Line.xlsx` |
+
+Capitals, spaces, underscores and dashes don't matter, and CSV or Excel
+both work, so the names the reporting system gives its exports work as
+they are. Old exports can stay in the folder: the newest file of each report
+is used, and the page says which ones it skipped. Files whose names match
+none of the three are named on the page and skipped. If a file's columns
+turn out to be a different report than its name says, the columns win and
+the page says so.
+
+You can also drag files onto the page, or click **Choose files…** — those
+are recognized by their column headings and held in memory only.
 
 For each account combination and period the page shows the Labor
 Distribution total, the DetailBalances period activity, the difference,
@@ -101,8 +118,10 @@ for lines set aside (below).
   only from this computer — which refuses requests from any other web
   page.
 * No outbound network requests, no external scripts or fonts.
-* The reports you load are held **in memory only** — never saved to disk —
-  and are gone when the window is closed or you click **Start over**.
+* It reads the reports in `data/` and never writes there. Everything in
+  `data/` except its README is **git-ignored**, so payroll data can't be
+  committed by accident. Files dragged onto the page are held **in memory
+  only**.
 * Python standard library only; every file here is short and readable.
 
 ## Trying it without real data, and for developers
@@ -110,6 +129,7 @@ for lines set aside (below).
 ```
 python make_demo.py                 # three fictional reports in demo/
 python reconcile.py demo/* -o result.xlsx   # same thing, no browser
+python reconcile.py -o result.xlsx          # the newest reports in data/
 python -m unittest discover tests   # run from this folder
 ```
 

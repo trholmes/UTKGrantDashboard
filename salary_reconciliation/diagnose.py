@@ -4,8 +4,10 @@ temporary, to settle how the reports behave before the tool's guesses
 become rules.
 
     python diagnose.py LD.csv DetailBalances.xlsx FundLineItems.xlsx
+    python diagnose.py            # the newest reports in data/
 
-(or drag the three files onto "Diagnose.bat"). Writes diagnostic.txt next
+(or double-click "Diagnose.bat" to use the data folder, or drag the three
+files onto it). Writes diagnostic.txt next
 to this script and prints the same text.
 
 What it prints: column headings, fiscal periods, GL account codes and
@@ -46,6 +48,12 @@ def sign(c):
 
 
 def main(paths):
+    if not paths:
+        paths, notes = rc.find_reports(rc.DATA_DIR)
+        say(f"From the data folder: {len(paths)} report(s)")
+        for n in notes:
+            say("  " + n)
+        say()
     raw = {}
     for p in paths:
         data = Path(p).read_bytes()
@@ -186,8 +194,6 @@ def main(paths):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        raise SystemExit(__doc__)
     try:
         main(sys.argv[1:])
     except Exception as exc:  # report it in the file too

@@ -2,8 +2,9 @@
 """Salary Reconciliation — a local page that lines up the Labor
 Distribution report against the General Ledger.
 
-Pick (or drag in) the three exports — Labor Distribution, DetailBalances
-and Fund Line Items — and the page shows, per account combination and
+Drop the three exports — Labor Distribution, DetailBalances and Fund Line
+Items — into the data folder next to this file (or drag them onto the
+page), and the page shows, per account combination and
 fiscal period, whether payroll and the ledger agree, and for each
 difference which lines are missing on which side. Results download as an
 Excel workbook.
@@ -12,14 +13,16 @@ Security model (the same as the grant dashboard next door):
   * The server binds strictly to 127.0.0.1 and refuses requests from any
     other page or hostname.
   * It makes zero outbound network requests.
-  * Files you pick are held in memory only — never written to disk — and
-    are gone when this window closes (or on "Start over").
+  * It reads the reports in its data folder (git-ignored, so they can't
+    be committed by accident) and never writes there. Files dragged onto
+    the page are held in memory only, never written to disk.
 
 No dependencies beyond the Python 3 standard library (Python 3.9+).
 
 Usage (or double-click "Start Salary Reconciliation.bat" on Windows):
     python3 server.py                  # serve on http://127.0.0.1:8790
     python3 server.py --port 9000
+    python3 server.py --data /path/to/reports
     python3 server.py --no-browser
 """
 
@@ -37,7 +40,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import reconcile  # noqa: E402
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+HERE = Path(__file__).resolve().parent
+STATIC_DIR = HERE / "static"
+DEFAULT_DATA_DIR = HERE / "data"
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
                  ".css": "text/css"}
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # a Fund Line Items export pads heavily
@@ -47,17 +52,30 @@ XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 class Session:
     """The reports picked so far: {kind: (filename, parsed lines)}."""
 
-    def __init__(self):
+    def __init__(self, data_dir=None):
         self.lock = threading.Lock()
+        self.data_dir = data_dir
         self.found = {}
         self.notes = []
 
     def add(self, name, data):
-        found, notes = reconcile.load([(name, data)])
+        return self._take(*reconcile.load([(name, data)]))
+
+    def load_folder(self):
+        """Read the reports in the data folder, replacing what's loaded."""
+        found, notes = reconcile.load_folder(self.data_dir) if self.data_dir else ({}, [])
+        if not found:
+            notes.append(f"No reports in the data folder ({self.data_dir}) — "
+                         f"drop the exports there and click Reload data folder.")
+        with self.lock:
+            self.found = {}
+        return self._take(found, notes)
+
+    def _take(self, found, notes):
         with self.lock:
             for kind, value in found.items():
                 if kind in self.found:
-                    notes.append(f"{self.found[kind][0]}: replaced by {name}.")
+                    notes.append(f"{self.found[kind][0]}: replaced by {value[0]}.")
                 self.found[kind] = value
             self.notes = notes
         return found, notes
@@ -76,6 +94,7 @@ class Session:
             notes = list(self.notes)
         result = reconcile.reconcile_files(found)
         return {
+            "data_dir": str(self.data_dir) if self.data_dir else None,
             "files": {k: {"name": v[0], "lines": len(v[1])} for k, v in found.items()},
             "notes": notes,
             "result": _jsonable(result),
@@ -175,10 +194,11 @@ def make_handler(session):
                     raise ValueError("file too large")
                 body = self.rfile.read(length)
                 if parts.path == "/api/file":
-                    name = unquote((query.get("name") or ["file"])[0])
-                    found, notes = session.add(name, body)
-                    self._send(200, json.dumps({"ok": bool(found), "notes": notes,
-                                                "kinds": list(found)}))
+                    _, notes = session.add(unquote((query.get("name") or ["file"])[0]), body)
+                    self._send(200, json.dumps({"ok": True, "notes": notes}))
+                elif parts.path == "/api/load-folder":
+                    _, notes = session.load_folder()
+                    self._send(200, json.dumps({"ok": True, "notes": notes}))
                 elif parts.path == "/api/clear":
                     kind = (query.get("kind") or [None])[0]
                     session.clear(kind)
@@ -197,10 +217,13 @@ def make_handler(session):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--port", type=int, default=8790)
+    ap.add_argument("--data", type=Path, default=DEFAULT_DATA_DIR,
+                    help="folder the reports are dropped into (default: ./data)")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
 
-    handler = make_handler(Session())
+    args.data.mkdir(parents=True, exist_ok=True)
+    handler = make_handler(Session(args.data))
     httpd = None
     for candidate in range(args.port, args.port + 10):
         try:
@@ -213,6 +236,7 @@ def main():
 
     url = f"http://127.0.0.1:{httpd.server_address[1]}"
     print(f"Salary Reconciliation running at {url}  (close this window or Ctrl-C to stop)")
+    print(f"Reports are read from {args.data}")
     if not args.no_browser:
         webbrowser.open(url)
     try:

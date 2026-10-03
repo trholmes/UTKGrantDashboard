@@ -168,3 +168,4 @@ tr.detail > td { background: var(--page); padding: 12px 16px 16px 40px; }
   font-size: 22px; font-weight: 600; color: var(--accent); pointer-events: none;
 }
 #drop-overlay[hidden] { display: none; }
+#data-dir { white-space: normal; overflow-wrap: anywhere; }

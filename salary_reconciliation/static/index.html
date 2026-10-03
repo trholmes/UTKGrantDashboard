@@ -15,6 +15,7 @@
   </div>
   <div class="topbar-actions">
     <button id="export-btn" class="btn primary" disabled title="Summary, the sorted Labor Distribution with subtotals, and every difference">Download Excel</button>
+    <button id="reload-btn" class="btn" title="Read the newest reports in the data folder again">Reload data folder</button>
     <button id="clear-btn" class="btn" title="Forget the loaded reports">Start over</button>
   </div>
 </header>
@@ -22,7 +23,7 @@
 <main>
   <section class="panel">
     <h2>Reports</h2>
-    <p class="hint">Drop the exports anywhere on this page, or pick them below — CSV or Excel, any filename, in any order. Each is recognized by its column headings. Files stay in memory on this computer only.</p>
+    <p class="hint">Save the exports into the data folder — <span id="data-dir" class="mono"></span> — and click <strong>Reload data folder</strong>. Each report is found by its name (the newest one wins if there are several). CSV or Excel both work. You can also drag files onto this page; those stay in memory only.</p>
     <div class="slots">
       <div class="slot" data-kind="labor_distribution">
         <div class="slot-step">1</div>

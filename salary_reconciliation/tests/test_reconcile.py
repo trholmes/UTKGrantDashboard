@@ -9,7 +9,9 @@ story they tell).
 import http.client
 import io
 import json
+import os
 import sys
+import tempfile
 import threading
 import unittest
 import zipfile
@@ -81,6 +83,56 @@ class Identify(unittest.TestCase):
         found, notes = reconcile.load([("budget.csv", b"Project,Budget\nX,1\n")])
         self.assertEqual(found, {})
         self.assertIn("budget.csv", notes[0])
+
+
+class DataFolder(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def put(self, name, data, age=0):
+        p = self.dir / name
+        p.write_bytes(data)
+        t = 1_700_000_000 - age
+        os.utime(p, (t, t))
+        return p
+
+    def test_names_as_the_reporting_system_exports_them(self):
+        for name, kind in [("5dd93ce3-Labor_Distribution_Report.csv", reconcile.LD),
+                           ("Labor Distribution Report (2).csv", reconcile.LD),
+                           ("DetailBalances_3.xlsx", reconcile.GL),
+                           ("Detail Balances.xlsx", reconcile.GL),
+                           ("Fund_Line_Items_-_3_Segments_Fund_Line_4.xlsx", reconcile.FLI),
+                           ("budget.xlsx", None)]:
+            self.assertEqual(reconcile.kind_by_name(name), kind, name)
+
+    def test_newest_of_each_report_wins(self):
+        ld, gl, fli = (data for _, data in demo_files())
+        self.put("Labor_Distribution_Report.csv", ld, age=100)
+        self.put("Labor_Distribution_Report (1).csv", ld, age=0)
+        self.put("DetailBalances.xlsx", gl)
+        self.put("Fund_Line_Items.xlsx", fli)
+        self.put("~$DetailBalances.xlsx", b"lock file")
+        self.put("notes.xlsx", b"whatever")
+        found, notes = reconcile.load_folder(self.dir)
+        self.assertEqual(found[reconcile.LD][0], "Labor_Distribution_Report (1).csv")
+        self.assertEqual(set(found), {reconcile.LD, reconcile.GL, reconcile.FLI})
+        text = " ".join(notes)
+        self.assertIn("ignoring Labor_Distribution_Report.csv", text)
+        self.assertIn("notes.xlsx", text)
+        self.assertNotIn("~$", text)
+
+    def test_contents_decide_when_the_name_is_wrong(self):
+        self.put("DetailBalances.csv", make_demo.ld_csv())
+        found, notes = reconcile.load_folder(self.dir)
+        self.assertIn(reconcile.LD, found)
+        self.assertIn("read as Labor Distribution", " ".join(notes))
+
+    def test_missing_folder(self):
+        self.assertEqual(reconcile.find_reports(self.dir / "nope"), ([], []))
 
 
 class Reconcile(unittest.TestCase):
@@ -177,13 +229,16 @@ class Xlsx(unittest.TestCase):
 
 class Server(unittest.TestCase):
     def setUp(self):
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(server.Session()))
+        self.tmp = tempfile.TemporaryDirectory()
+        self.session = server.Session(Path(self.tmp.name))
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(self.session))
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         self.port = self.httpd.server_address[1]
 
     def tearDown(self):
         self.httpd.shutdown()
         self.httpd.server_close()
+        self.tmp.cleanup()
 
     def request(self, method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port)
@@ -201,6 +256,18 @@ class Server(unittest.TestCase):
         self.assertEqual(state["result"]["counts"]["mismatch"], 2)
         status, body = self.request("GET", "/api/export")
         self.assertEqual((status, body[:2]), (200, b"PK"))
+
+    def test_load_folder(self):
+        status, body = self.request("POST", "/api/load-folder")
+        self.assertIn("No reports in the data folder", json.loads(body)["notes"][0])
+        for (_, data), name in zip(demo_files(), ("Labor_Distribution_Report.csv",
+                                                  "DetailBalances.xlsx", "Fund_Line_Items.xlsx")):
+            (Path(self.tmp.name) / name).write_bytes(data)
+        status, body = self.request("POST", "/api/load-folder")
+        self.assertEqual(status, 200, body)
+        state = json.loads(self.request("GET", "/api/state")[1])
+        self.assertEqual(state["files"][reconcile.GL]["name"], "DetailBalances.xlsx")
+        self.assertEqual(state["result"]["counts"]["mismatch"], 2)
 
     def test_other_origins_are_refused(self):
         status, _ = self.request("POST", "/api/file?name=x.csv", make_demo.ld_csv(),
