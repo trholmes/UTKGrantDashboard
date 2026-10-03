@@ -330,12 +330,17 @@ class ByPerson(unittest.TestCase):
         ld = found[reconcile.LD][1] + [dict(found[reconcile.LD][1][0], person="Far, Away",
                                             txn="777", combo=tuple("10-9999999-100100-512100-210-0000-00-0000".split("-")))]
         result = reconcile.reconcile(ld, None, found[reconcile.FLI][1])
-        self.assertEqual(person(result, "Far, Away")["status"], "not_covered")
+        far = person(result, "Far, Away")
+        self.assertEqual(far["status"], "not_covered")
+        # not compared is not the same as missing from the ledger
+        self.assertEqual([x["kind"] for x in far["cells"][0]["lines"]], ["not_compared"])
 
     def test_without_fund_line_items_people_are_listed_unchecked(self):
         result, _ = run_demo((reconcile.LD, reconcile.GL))
         self.assertEqual({p["status"] for p in result["people"]}, {"unchecked"})
         self.assertEqual(person(result, "Rivera, Ana")["gl_total"], None)
+        self.assertEqual({x["kind"] for p in result["people"] for c in p["cells"] for x in c["lines"]},
+                         {"not_compared"})
 
 
 class Xlsx(unittest.TestCase):

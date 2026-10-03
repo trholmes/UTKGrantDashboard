@@ -297,9 +297,12 @@ function personDetailHtml(p) {
 function lineHtml(x, c) {
   const ld = x.ld, gl = x.gl;
   const what = ld ? `${ld.pay_element}` : (gl.person ? gl.assignment : (gl.text || gl.header_text));
-  const when = ld ? `${ld.pay_start}–${ld.pay_end}` : gl.posted;
+  // a share of someone's pay split across funds (Line Percentage 50 = half)
+  const share = ld && ld.percent && Number(ld.percent) !== 100 ? ` · ${ld.percent}% of this pay` : "";
+  const when = (ld ? `${ld.pay_start}–${ld.pay_end}` : gl.posted) + share;
   const note = {
     pair: "",
+    not_compared: "",
     amount_differs: "same transaction, different amount",
     ld_only: "not in the ledger",
     gl_only: "no Labor Distribution line",

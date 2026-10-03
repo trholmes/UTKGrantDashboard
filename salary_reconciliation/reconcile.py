@@ -642,6 +642,11 @@ def _person_cells(p, coverage, names, checked):
             status = "explained"
         else:
             status = "mismatch"
+        if status in ("unchecked", "not_covered"):
+            # nothing to compare against: not evidence the line is missing
+            for x in c["lines"]:
+                if x["kind"] == "ld_only":
+                    x["kind"] = "not_compared"
         c["lines"].sort(key=lambda x: (x["ld"] or {}).get("pay_element", "") or (x["gl"] or {}).get("text", ""))
         out.append({
             "combo": combo_text(c["combo"] or key), "account": key[3],
@@ -915,7 +920,7 @@ def export_workbook(result, sources=None):
                                  PERSON_STATUS_TEXT[c["status"]]])
             # the lines that don't simply pair up
             for x in c["lines"]:
-                if x["kind"] == "pair":
+                if x["kind"] in ("pair", "not_compared"):
                     continue
                 ld, gl = x["ld"], x["gl"]
                 note = {"amount_differs": "Same transaction, different amount",
