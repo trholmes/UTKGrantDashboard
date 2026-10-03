@@ -6,6 +6,7 @@ const STATUS = {
   mismatch: "Does not match",
   not_in_gl: "Not in DetailBalances",
   gl_only: "Ledger only — no Labor Distribution",
+  posted_elsewhere: "Explained — posted to another account",
   unchecked: "Not compared yet",
 };
 const KIND_NAMES = {
@@ -116,7 +117,9 @@ function render() {
   $("#tiles").innerHTML = [
     tile("Account combinations", res.rows.length),
     tile(hasGL ? "Labor Distribution (compared)" : "Labor Distribution total", money(res.totals.ld)),
-    hasGL ? tile("Match the ledger", c.match || 0, "good") : tile("DetailBalances", "not loaded"),
+    hasGL ? tile("Match the ledger", c.match || 0, "good",
+                 c.posted_elsewhere ? `+ ${c.posted_elsewhere} explained by lines posted to another account or period` : "")
+          : tile("DetailBalances", "not loaded"),
     hasGL ? tile("Differences", problems, problems ? "bad" : "good",
                  problems ? `ledger − LD: ${money(diffTotal)}` : "everything ties out") : "",
   ].join("");
@@ -146,7 +149,7 @@ function tile(label, value, cls = "", sub = "") {
 }
 
 function rowMatches(r, q) {
-  if (filter === "problems" && (r.status === "match" || r.status === "unchecked")) return false;
+  if (filter === "problems" && ["match", "unchecked", "posted_elsewhere"].includes(r.status)) return false;
   if (!q) return true;
   if (r.combo.toLowerCase().includes(q) || r.period.includes(q)) return true;
   return r.ld_lines.some((l) => l.person.toLowerCase().includes(q) || l.person_number.includes(q));
@@ -218,13 +221,35 @@ function explainHtml(r) {
         moneyCell(m.ld.amount) + moneyCell(m.gl.amount) + moneyCell(m.gl.amount - m.ld.amount) + `</tr>`).join("") +
       `</tbody></table>`);
   }
-  if (!fli.gl_only.length && !fli.ld_only.length && !fli.amount_differs.length) {
+  if (fli.moved_out.length) {
+    out.push(`<h3>Charged here in Labor Distribution, posted to another account or period in the ledger (${fli.moved_out.length})</h3>` +
+      movedTable(fli.moved_out, (m) => esc(`${m.gl.key.split("-")[3]} ${m.gl.account_name}`) +
+        (m.to_period !== r.period ? `, ${esc(m.to_period)}` : "") + `<div class="small-muted mono">${esc(m.to)}</div>`, "Posted to"));
+  }
+  if (fli.moved_in.length) {
+    out.push(`<h3>In the ledger here, charged to another account or period in Labor Distribution (${fli.moved_in.length})</h3>` +
+      movedTable(fli.moved_in, (m) => `<span class="mono">${esc(m.from)}</span>` +
+        (m.from_period !== r.period ? `, ${esc(m.from_period)}` : ""), "Charged in LD to"));
+  }
+  if (fli.moved_out.length || fli.moved_in.length) {
+    out.push(fli.unexplained === 0
+      ? `<p class="explain">That accounts for the whole difference: accounting posted these lines to a different GL account (or period) than the one Labor Distribution shows.</p>`
+      : `<p class="explain">Counting those, <strong>${money(Math.abs(fli.unexplained))}</strong> is still unexplained.</p>`);
+  }
+  if (!fli.gl_only.length && !fli.ld_only.length && !fli.amount_differs.length
+      && !fli.moved_out.length && !fli.moved_in.length) {
     out.push(`<p class="explain">Every Fund Line Items line pairs with a Labor Distribution line, so the difference isn't in the individual lines — check that both reports were run for the same period.</p>`);
   }
-  if (fli.matched_by_amount.length) {
-    out.push(`<p class="small-muted">${fli.matched_by_amount.length} ledger line(s) were paired with Labor Distribution by amount because their reference didn't match a transaction number.</p>`);
-  }
   return out.join("");
+}
+
+// Lines whose two sides sit on different accounts; `where` describes the other side.
+function movedTable(moves, where, whereLabel) {
+  return `<table><thead><tr><th>Person</th><th>Pay element</th><th>Transaction</th><th>${esc(whereLabel)}</th>` +
+    `<th class="num">Amount</th></tr></thead><tbody>` +
+    moves.map((m) => `<tr><td>${esc(m.ld.person)}</td><td>${esc(m.ld.pay_element)}</td>` +
+      `<td class="mono">${esc(m.ld.txn)}</td><td>${where(m)}</td>${moneyCell(m.ld.amount)}</tr>`).join("") +
+    `</tbody></table>`;
 }
 
 function ldTable(lines, subtotals) {

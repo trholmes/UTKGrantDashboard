@@ -6,7 +6,9 @@ exports — to try the page or the command line without real payroll data:
     python reconcile.py demo/* -o demo-result.xlsx
 
 The story they tell, for fiscal period 27-03:
-  * fund 1100001 / 512100 ties out;
+  * fund 1100001 / 512100: Labor Distribution charges a longevity payment
+    (300.00) here, but accounting posts it to 512400 Faculty Longevity
+    Pay — both rows are explained by that one line;
   * fund 1100017 / 512100: the ledger is 500.00 higher — a salary
     transfer journal posted with no Labor Distribution line behind it;
   * fund 2200231 / 512300: one Labor Distribution line (1,200.00) never
@@ -50,11 +52,13 @@ A = "10-1100001-106015-512100-210-0000-00-0000"
 B = "10-1100017-106015-512100-220-0053-00-0000"
 C = "10-2200231-100100-512300-210-0000-00-0000"
 D = "10-1100001-106015-513100-210-0000-00-0000"
+E = "10-1100001-106015-512400-210-0000-00-0000"
 
 # person, number, assignment, pay element, period, amount, txn, combo
 LD_LINES = [
     ("Rivera, Ana", "00100001", "Associate Professor", "UT Monthly 9 Month Salary Earnings Results", "27-03", "4975.82", "30000001", A),
     ("Rivera, Ana", "00100001", "Associate Professor", "UT Monthly 9 Month Salary Earnings Results", "27-03", "4975.83", "30000002", B),
+    ("Rivera, Ana", "00100001", "Associate Professor", "Ern E Longevity Pay Earnings Results", "27-03", "300.00", "30000006", A),
     ("Chen, Wei", "00100002", "Graduate Research Assistant", "UT Monthly GRA Earnings Results", "27-03", "2100.00", "30000003", A),
     ("Okafor, Grace", "00100003", "Research Associate", "UT Monthly Staff Earnings Results", "27-03", "3800.00", "30000004", C),
     ("Okafor, Grace", "00100003", "Research Associate", "Ern E Longevity Pay Earnings Results", "27-03", "1200.00", "30000005", C),
@@ -66,6 +70,7 @@ GL_ROWS = [
     ("27-03", B, "4975.83", "5475.83"),
     ("27-03", C, "0", "3800.00"),
     ("27-03", D, "0", "750.00"),
+    ("27-03", E, "0", "300.00"),
     ("27-03", "10-1100001-106015-100000-210-0000-00-0000", "0", "-12000.00"),
 ]
 
@@ -76,6 +81,7 @@ FLI_LINES = [
     (B, "4975.83", "30000002", "Accounting for Rivera, Ana Assignment name: Associate Professor", "27-03 Labor Cost", "Project Accounting", "", "S"),
     (B, "500.00", "JE-88213", "Salary transfer Rivera Aug summer correction", "27-03 Salary Transfer", "Manual", "JDOE", "S"),
     (C, "3800.00", "30000004", "Accounting for Okafor, Grace Assignment name: Research Associate", "27-03 Labor Cost", "Project Accounting", "", "S"),
+    (E, "300.00", "30000006", "Accounting for Rivera, Ana Assignment name: Associate Professor", "27-03 Labor Cost", "Project Accounting", "", "S"),
     (D, "750.00", "JE-88214", "Hourly wages reclass", "27-03 Reclass", "Manual", "JDOE", "S"),
     ("10-1100001-106015-200010-210-0000-00-0000", "1486.84", "349782", "Payment Created", "27-03 Payments", "Payables", "", "S"),
 ]
@@ -113,6 +119,11 @@ def gl_xlsx():
     return xlsx.write_workbook([{"name": "Sheet1", "rows": rows}])
 
 
+ACCOUNT_NAMES = {"512100": "Faculty Salaries", "512300": "Staff Salaries",
+                 "512400": "Faculty Longevity Pay", "513100": "GTA GA GRA Salaries",
+                 "200010": "AP Trade Vendors Reconciliation"}
+
+
 def fli_xlsx():
     rows = [FLI_HEADER, [""] * 33 + ["Descr."]]
     for i, (combo, amount, ref, text, head, dtype, user, dc) in enumerate(FLI_LINES, 1):
@@ -121,7 +132,7 @@ def fli_xlsx():
         row.update({
             "Year": 2027.0, "Period": 3.0, "LnItm": str(i), "Pstng Date": "09/30/2026 11:10 PM",
             "Entry dte": "09/30/2026", "Amount": float(amount), "Entity ID": e, "Fund": fund,
-            "Department ID": dept, "Program ID": prog, "GL Account": acct, "Activity Code": act,
+            "Department ID": dept, "Program ID": prog, "GL Account": acct, "G/L Account Text": ACCOUNT_NAMES[acct], "Activity Code": act,
             "SPL Doc Line Item Txt": text, "Document Header Text": head, "D/C": dc,
             "User Name": user, "Record No.": str(2400000 + i), "Ref Doc": ref,
             "Document Type": dtype, "Debit/Credit Indicator": "Debit" if dc == "S" else "Credit",

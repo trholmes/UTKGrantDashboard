@@ -245,18 +245,16 @@ def parse_fli(rows, at):
             fiscal = f"{year % 100:02d}-{per:02d}"
         except (TypeError, ValueError):
             fiscal = ""
-        amount = cents(r.get("Amount"))
-        credit = (_clean(r.get("Debit/Credit Indicator")).lower() == "credit"
-                  or _clean(r.get("D/C")).upper() == "H")
-        if credit and amount > 0:
-            amount = -amount
         key = (segment(r.get("Entity ID"), 2), segment(r.get("Fund"), 7),
                segment(r.get("Department ID"), 6), segment(r.get("GL Account"), 6),
                segment(r.get("Program ID"), 3), segment(r.get("Activity Code"), 4))
         lines.append({
             "key": key,
             "period": fiscal,
-            "amount": amount,
+            # Already signed: credits are negative, and a reversal is a
+            # negative debit (checked: the lines add up to DetailBalances).
+            "amount": cents(r.get("Amount")),
+            "account_name": _clean(r.get("G/L Account Text")),
             "doc": _clean(r.get("FI_DocNo")),
             "line": _clean(r.get("LnItm")),
             "posted": _clean(r.get("Entry dte") or r.get("Pstng Date")),
@@ -283,36 +281,28 @@ def _ld_sort_key(line):
 
 
 def _match_fli(ld_lines, fli_lines):
-    """Pair ledger lines with Labor Distribution lines.
-
-    First by reference (Fund Line Items' Ref Doc is the LD Transaction
-    Number); then whatever is left, by identical amount — a line can carry a
-    different reference after a reversal or a re-post, and a same-amount
-    pair is almost always the same charge. Returns the matched pairs and the
-    lines left on each side."""
+    """Pair ledger lines with Labor Distribution lines by reference: Fund
+    Line Items' Ref Doc is the LD Transaction Number. (Not by amount: on a
+    busy account two people paid the same would be paired by mistake.)
+    Returns the pairs with equal amounts, those whose amounts differ, and
+    the lines left on each side."""
     ld_left = list(ld_lines)
-    gl_left = list(fli_lines)
+    gl_left = []
     matched, amount_differs = [], []
     by_txn = {}
     for ld in ld_left:
         if ld["txn"]:
             by_txn.setdefault(ld["txn"], []).append(ld)
-    for gl in list(gl_left):
+    for gl in fli_lines:
         candidates = by_txn.get(gl["ref"]) or []
         if not candidates:
+            gl_left.append(gl)
             continue
         exact = [c for c in candidates if c["amount"] == gl["amount"]]
         ld = (exact or candidates)[0]
         candidates.remove(ld)
         ld_left.remove(ld)
-        gl_left.remove(gl)
-        (matched if exact else amount_differs).append({"ld": ld, "gl": gl, "how": "reference"})
-    for gl in list(gl_left):
-        ld = next((c for c in ld_left if c["amount"] == gl["amount"]), None)
-        if ld is not None:
-            ld_left.remove(ld)
-            gl_left.remove(gl)
-            matched.append({"ld": ld, "gl": gl, "how": "amount"})
+        (matched if exact else amount_differs).append({"ld": ld, "gl": gl})
     return matched, amount_differs, gl_left, ld_left
 
 
@@ -353,7 +343,7 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
             b = bucket(g["combo"], g["period"])
             b["gl_total"] = (b["gl_total"] or 0) + g["activity"]
 
-    fli_index, fli_coverage = {}, set()
+    fli_index, fli_coverage, claimed = {}, set(), set()
     for f in fli_lines or []:
         fli_index.setdefault((f["key"], f["period"]), []).append(f)
         fli_coverage.add((f["key"][1], f["period"]))
@@ -388,8 +378,23 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
                 row["status"] = "mismatch"
         if fli_lines is not None:
             row["fli"] = _fli_detail(combo, per, ld_lines_b, row["gl_total"],
-                                     fli_index, fli_coverage)
+                                     fli_index, fli_coverage, claimed)
         rows.append(row)
+
+    if fli_lines is not None:
+        _posted_elsewhere(rows, fli_lines, claimed)
+        for row in rows:
+            d = row["fli"]
+            if not d.get("covered") or row["diff"] is None:
+                continue
+            # What's left of the difference once lines posted to (or from)
+            # another account or period are counted.
+            d["unexplained"] = (row["diff"]
+                                + sum(m["ld"]["amount"] for m in d["moved_out"])
+                                - sum(m["gl"]["amount"] for m in d["moved_in"]))
+            if (row["status"] in ("mismatch", "not_in_gl", "gl_only")
+                    and (d["moved_out"] or d["moved_in"]) and d["unexplained"] == 0):
+                row["status"] = "posted_elsewhere"
 
     totals = {
         "ld": sum(r["ld_total"] for r in rows),
@@ -409,12 +414,51 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
     }
 
 
-def _fli_detail(combo, per, ld_lines_b, gl_total, fli_index, fli_coverage):
+def _posted_elsewhere(rows, fli_lines, claimed):
+    """Find the Labor Distribution lines missing from their own account in
+    the ledger that were posted somewhere else — accounting re-maps some
+    pay elements (longevity pay charged to 512100 posts to 512400 Faculty
+    Longevity Pay), and a line can land in another period. Moves each such
+    pair out of the "missing" lists: on the LD side it's recorded as
+    moved_out, on the ledger side (if that combination is a row here) as
+    moved_in."""
+    by_ref = {}
+    for f in fli_lines:
+        if f["ref"] and id(f) not in claimed:
+            by_ref.setdefault(f["ref"], []).append(f)
+    owner = {}  # id(ledger line) -> the row listing it as ledger-only
+    for row in rows:
+        d = row["fli"]
+        if d.get("covered"):
+            for f in d["gl_only"]:
+                owner.setdefault(id(f), row)
+    for row in rows:
+        d = row["fli"]
+        if not d.get("covered"):
+            continue
+        for ld in list(d["ld_only"]):
+            f = next((f for f in by_ref.get(ld["txn"], [])
+                      if f["amount"] == ld["amount"] and id(f) not in claimed), None)
+            if f is None:
+                continue
+            claimed.add(id(f))
+            d["ld_only"].remove(ld)
+            d["moved_out"].append({"ld": ld, "gl": f, "to": combo_text(f["key"]),
+                                   "to_period": f["period"]})
+            target = owner.get(id(f))
+            if target is not None:
+                target["fli"]["gl_only"].remove(f)
+                target["fli"]["moved_in"].append({"ld": ld, "gl": f, "from": row["combo"],
+                                                  "from_period": row["period"]})
+
+
+def _fli_detail(combo, per, ld_lines_b, gl_total, fli_index, fli_coverage, claimed):
     key = combo[:FLI_SEGMENTS]
     fli = fli_index.get((key, per), [])
     if not fli and (combo[1], per) not in fli_coverage:
         return {"covered": False}
     matched, amount_differs, gl_only, ld_only = _match_fli(ld_lines_b, fli)
+    claimed.update(id(m["gl"]) for m in matched + amount_differs)
     fli_total = sum(f["amount"] for f in fli)
     gl_only.sort(key=lambda f: (f["posted"], f["doc"], f["line"]))
     ld_only.sort(key=_ld_sort_key)
@@ -426,10 +470,12 @@ def _fli_detail(combo, per, ld_lines_b, gl_total, fli_index, fli_coverage):
         # are incomplete.
         "agrees_with_gl": gl_total is None or fli_total == gl_total,
         "matched": len(matched),
-        "matched_by_amount": [m for m in matched if m["how"] == "amount"],
         "amount_differs": amount_differs,
         "gl_only": gl_only,
         "ld_only": ld_only,
+        "moved_out": [],   # filled in by _posted_elsewhere()
+        "moved_in": [],
+        "unexplained": None,
     }
 
 
@@ -547,6 +593,7 @@ STATUS_TEXT = {
     "mismatch": "Does not match",
     "not_in_gl": "Not in DetailBalances",
     "gl_only": "In ledger, no Labor Distribution",
+    "posted_elsewhere": "Explained: posted to another account/period",
     "unchecked": "Not compared (no DetailBalances)",
 }
 
@@ -616,6 +663,20 @@ def export_workbook(result, sources=None):
                                m["ld"]["pay_start"],
                                f"{m['ld']['person']} — {m['ld']['pay_element']}",
                                _amt(m["ld"]["amount"]), m["ld"]["txn"], "", "", ""])
+        for m in fli["moved_out"]:
+            g = m["gl"]
+            diff_sheet.append([r["combo"], r["period"],
+                               f"Posted to {g['key'][3]} {g['account_name']} in {m['to_period']}"
+                               f" ({m['to']})",
+                               g["posted"], f"{m['ld']['person']} — {m['ld']['pay_element']}",
+                               _amt(m["ld"]["amount"]), m["ld"]["txn"], g["doc"],
+                               g["doc_type"], g["user"]])
+        for m in fli["moved_in"]:
+            g = m["gl"]
+            diff_sheet.append([r["combo"], r["period"],
+                               f"Charged in Labor Distribution to {m['from']} ({m['from_period']})",
+                               g["posted"], f"{m['ld']['person']} — {m['ld']['pay_element']}",
+                               _amt(g["amount"]), g["ref"], g["doc"], g["doc_type"], g["user"]])
 
     sheets = [
         {"name": "Summary", "rows": summary,

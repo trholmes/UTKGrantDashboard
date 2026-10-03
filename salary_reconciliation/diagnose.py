@@ -43,10 +43,6 @@ def table(counter, label, limit=60):
         say(f"  ... and {len(counter) - limit} more {label}")
 
 
-def sign(c):
-    return "positive" if c > 0 else "negative" if c < 0 else "zero"
-
-
 def main(paths):
     if not paths:
         paths, notes = rc.find_reports(rc.DATA_DIR)
@@ -138,62 +134,66 @@ def main(paths):
 
     # -- debit/credit conventions in Fund Line Items ----------------------
     if fli is not None:
-        say("== FUND LINE ITEMS: debit/credit columns vs. the sign of Amount")
-        combos = Counter()
-        raw_amount = {}
-        for r in rc._records(*raw[rc.FLI]):
-            if not str(r.get("GL Account") or "").strip() or not str(r.get("Fund") or "").strip():
-                continue
-            a = rc.cents(r.get("Amount"))
-            combos[(rc._clean(r.get("D/C")) or "-", rc._clean(r.get("Debit/Credit Indicator")) or "-",
-                    sign(a))] += 1
-        say("  (D/C, Debit/Credit Indicator, sign of Amount): lines")
-        table(Counter({f"{k[0]:>3} | {k[1]:<8} | {k[2]}": v for k, v in combos.items()}), "kinds")
-
-        if gl is not None:
-            # Which sign convention makes Fund Line Items add up to the ledger?
-            gl6 = defaultdict(int)
-            for g in gl:
-                if g["combo"][3][:2] in families:
-                    gl6[(g["combo"][:rc.FLI_SEGMENTS], g["period"])] += g["activity"]
-            as_is, flipped = defaultdict(int), defaultdict(int)
-            for r, f in zip((r for r in rc._records(*raw[rc.FLI])
-                             if str(r.get("GL Account") or "").strip()
-                             and str(r.get("Fund") or "").strip()), fli):
-                a = rc.cents(r.get("Amount"))
-                as_is[(f["key"], f["period"])] += a
-                flipped[(f["key"], f["period"])] += f["amount"]
-            covered = [k for k in gl6 if k in as_is]
-            say(f"Salary-family ledger combinations that Fund Line Items also covers: {len(covered)}")
-            say(f"  Fund Line Items adds up to DetailBalances, Amount taken as is:       "
-                f"{sum(1 for k in covered if as_is[k] == gl6[k])}")
-            say(f"  Fund Line Items adds up to DetailBalances, credits made negative:    "
-                f"{sum(1 for k in covered if flipped[k] == gl6[k])}")
+        say("== FUND LINE ITEMS")
+        labor = [f for f in fli if PERIOD_PREFIX.sub("", f["header_text"]) == "Labor Cost"]
+        people = {m.group(1) for f in labor
+                  for m in [re.match(r"Accounting for (.+?) Assignment name", f["text"])] if m}
+        say(f"Labor Cost lines: {len(labor)}, for {len(people)} different people "
+            f"(Labor Distribution file: {len({l['person'] for l in ld})} people)")
         say()
 
     # -- the reconciliation itself ---------------------------------------
     result = rc.reconcile(ld, gl, fli)
     say("== RESULT")
     say(f"Periods compared: {result['periods']['compared']}")
-    say("Combinations by status:")
-    table(Counter(rc.STATUS_TEXT[r["status"]] for r in result["rows"]), "statuses")
+    say("Combinations by period and status:")
+    table(Counter(f"{r['period']}  {rc.STATUS_TEXT[r['status']]}" for r in result["rows"]),
+          "statuses")
     say(f"LD lines outside compared periods: {len(result['outside_periods'])}; "
         f"not Success: {len(result['excluded'])}")
-    if fli is not None:
-        det = [r["fli"] for r in result["rows"] if r["fli"] and r["fli"]["covered"]]
-        uncovered = sum(1 for r in result["rows"] if r["fli"] and not r["fli"]["covered"])
-        say(f"Combinations Fund Line Items covers: {len(det)}; doesn't cover: {uncovered}")
-        say(f"  ...where its lines add up to DetailBalances: "
-            f"{sum(1 for d in det if d['agrees_with_gl'])} of {len(det)}")
-        say(f"Line pairs: by reference {sum(d['matched'] - len(d['matched_by_amount']) for d in det)}, "
-            f"by amount {sum(len(d['matched_by_amount']) for d in det)}, "
-            f"same reference/different amount {sum(len(d['amount_differs']) for d in det)}")
-        say("Ledger lines with no LD line, by Document Type / Document Header Text "
-            "(period prefix removed):")
-        table(Counter(f["doc_type"] + " / " + PERIOD_PREFIX.sub("", f["header_text"])
-                      for d in det for f in d["gl_only"]), "kinds")
-        say("LD lines missing from the ledger, by pay element:")
-        table(Counter(l["pay_element"] for d in det for l in d["ld_only"]), "pay elements")
+    if fli is None:
+        return
+    det = [r["fli"] for r in result["rows"] if r["fli"]["covered"]]
+    say(f"Combinations Fund Line Items covers: {len(det)}; doesn't cover: "
+        f"{sum(1 for r in result['rows'] if not r['fli']['covered'])}")
+    say(f"  ...where its lines add up to DetailBalances: "
+        f"{sum(1 for d in det if d['agrees_with_gl'])} of {len(det)}")
+    say(f"Line pairs by reference: {sum(d['matched'] for d in det)}; "
+        f"same reference, different amount: {sum(len(d['amount_differs']) for d in det)}")
+    say("LD lines posted to another account/period (LD account -> ledger account, pay element):")
+    table(Counter(f"{m['ld']['combo'][3]} -> {m['gl']['key'][3]} {m['gl']['account_name']}"
+                  f"{' (period ' + m['to_period'] + ')' if m['to_period'] != m['ld']['period'] else ''}"
+                  f" | {m['ld']['pay_element']}"
+                  for d in det for m in d["moved_out"]), "kinds")
+    say("Ledger lines with no LD line, by Document Type / Document Header Text "
+        "(period prefix removed):")
+    table(Counter(f["doc_type"] + " / " + PERIOD_PREFIX.sub("", f["header_text"])
+                  for d in det for f in d["gl_only"]), "kinds")
+    say("LD lines missing from the ledger, by pay element:")
+    table(Counter(l["pay_element"] for d in det for l in d["ld_only"]), "pay elements")
+    say()
+
+    say("== EVERY COMBINATION THAT ISN'T A PLAIN MATCH (funds left out)")
+    say("  period  account  status | LD lines, ledger-only lines, LD-only lines, "
+        "posted out, posted in | after those: explained?")
+    gl_scope = {(g["combo"][1], g["combo"][2], g["period"]) for g in gl or []}
+    fli_scope = {(f["key"][1], f["period"]) for f in fli}
+    for r in result["rows"]:
+        if r["status"] == "match":
+            continue
+        d, seg = r["fli"], r["segments"]
+        line = f"  {r['period']}   {seg['account']}  {rc.STATUS_TEXT[r['status']]} | {len(r['ld_lines'])}, "
+        if d["covered"]:
+            line += (f"{len(d['gl_only'])}, {len(d['ld_only'])}, {len(d['moved_out'])}, "
+                     f"{len(d['moved_in'])} | {'yes' if d['unexplained'] == 0 else 'no'}")
+        else:
+            line += "Fund Line Items has nothing for this fund+period"
+        if r["status"] == "not_in_gl":
+            line += (f" | DetailBalances has other rows for this fund+department in this period: "
+                     f"{'yes' if (seg['fund'], seg['department'], r['period']) in gl_scope else 'no'}"
+                     f"; Fund Line Items has this fund+period: "
+                     f"{'yes' if (seg['fund'], r['period']) in fli_scope else 'no'}")
+        say(line)
 
 
 if __name__ == "__main__":

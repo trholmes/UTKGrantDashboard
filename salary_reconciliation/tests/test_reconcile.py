@@ -29,7 +29,7 @@ import xlsx  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
-A, B, C, D = make_demo.A, make_demo.B, make_demo.C, make_demo.D
+A, B, C, D, E = make_demo.A, make_demo.B, make_demo.C, make_demo.D, make_demo.E
 
 
 def demo_files():
@@ -152,13 +152,16 @@ class Reconcile(unittest.TestCase):
         combos = [(r["combo"], r["period"]) for r in result["rows"]]
         self.assertEqual(combos, sorted(combos))
         a = row(result, A)
-        self.assertEqual([l["person"] for l in a["ld_lines"]], ["Chen, Wei", "Rivera, Ana"])
+        self.assertEqual([l["person"] for l in a["ld_lines"]],
+                         ["Chen, Wei", "Rivera, Ana", "Rivera, Ana"])
         self.assertEqual(a["status"], "unchecked")
         self.assertEqual(row(result, A, "27-02")["ld_total"], 497582)
 
     def test_against_detail_balances(self):
         result, _ = run_demo((reconcile.LD, reconcile.GL))
-        self.assertEqual(row(result, A)["status"], "match")
+        # the longevity line is on 512100 in LD, 512400 in the ledger
+        self.assertEqual((row(result, A)["status"], row(result, A)["diff"]), ("mismatch", -30000))
+        self.assertEqual(row(result, E)["status"], "gl_only")
         self.assertEqual(row(result, B)["diff"], 50000)
         self.assertEqual(row(result, C)["diff"], -120000)
         d = row(result, D)
@@ -178,25 +181,38 @@ class Reconcile(unittest.TestCase):
         self.assertEqual([l["txn"] for l in c["ld_only"]], ["30000005"])
         self.assertEqual(c["gl_only"], [])
         self.assertTrue(c["agrees_with_gl"])
-        a = row(result, A)["fli"]
-        self.assertEqual((a["matched"], a["gl_only"], a["ld_only"]), (2, [], []))
+        self.assertEqual(row(result, B)["status"], "mismatch")
 
-    def test_reference_mismatch_falls_back_to_amount(self):
+    def test_lines_posted_to_another_account_explain_both_rows(self):
+        result, _ = run_demo()
+        a, e = row(result, A), row(result, E)
+        self.assertEqual((a["status"], e["status"]), ("posted_elsewhere", "posted_elsewhere"))
+        self.assertEqual(a["fli"]["matched"], 2)
+        self.assertEqual(a["fli"]["ld_only"], [])
+        [out] = a["fli"]["moved_out"]
+        self.assertEqual((out["ld"]["txn"], out["gl"]["key"][3], out["gl"]["account_name"]),
+                         ("30000006", "512400", "Faculty Longevity Pay"))
+        [came] = e["fli"]["moved_in"]
+        self.assertEqual((came["from"], e["fli"]["gl_only"], e["fli"]["unexplained"]), (A, [], 0))
+        self.assertEqual(result["counts"]["mismatch"], 2)  # B and C stay unexplained
+
+    def test_no_pairing_by_amount_alone(self):
+        """Two people paid the same on one account must not be paired."""
         ld = [{"combo": tuple(A.split("-")), "period": "27-03", "person": "X", "txn": "1",
                "status": "Success", "amount": 100, "pay_start": "", "pay_element": ""}]
         fli = [{"key": tuple(A.split("-"))[:6], "period": "27-03", "amount": 100,
-                "ref": "OTHER", "posted": "", "doc": "", "line": ""}]
-        result = reconcile.reconcile(ld, None, fli)
-        detail = result["rows"][0]["fli"]
-        self.assertEqual(len(detail["matched_by_amount"]), 1)
-        self.assertEqual(detail["gl_only"], [])
+                "ref": "2", "posted": "", "doc": "", "line": ""}]
+        detail = reconcile.reconcile(ld, None, fli)["rows"][0]["fli"]
+        self.assertEqual((len(detail["gl_only"]), len(detail["ld_only"])), (1, 1))
 
-    def test_credit_lines_are_negative(self):
-        rows = [make_demo.FLI_HEADER,
-                ["2027", "3", "", "1", "", "", "", "250", "", "10", "", "1100001", "", "106015",
-                 "", "210", "", "512100", "", "0000", "", "Reversal", "", "H", "", "", "", "",
-                 "", "", "R1", "Manual", "Credit", "Actual"]]
-        self.assertEqual(reconcile.parse_fli(rows, 0)[0]["amount"], -25000)
+    def test_amount_is_taken_as_signed(self):
+        """Credits come negative, and reversals as negative debits."""
+        def line(amount, dc, indicator):
+            return ["2027", "3", "", "1", "", "", "", amount, "", "10", "", "1100001", "",
+                    "106015", "", "210", "", "512100", "", "0000", "", "Reversal", "", dc,
+                    "", "", "", "", "", "", "R1", "Manual", indicator, "Actual"]
+        rows = [make_demo.FLI_HEADER, line("-250", "H", "Credit"), line("-40", "S", "Debit")]
+        self.assertEqual([l["amount"] for l in reconcile.parse_fli(rows, 0)], [-25000, -4000])
 
     def test_non_success_lines_are_set_aside(self):
         found, _ = reconcile.load(demo_files()[:1])

@@ -72,6 +72,7 @@ and a status:
 | **Does not match** | Both have amounts, and they differ. |
 | **Not in DetailBalances** | Payroll charged this combination; the ledger report has no row for it. |
 | **Ledger only** | The ledger shows salary-type activity on a combination no Labor Distribution line was charged to. |
+| **Explained — posted to another account** | The whole difference is lines accounting posted to a different GL account (or period) than Labor Distribution shows — see below. |
 
 Click a row to open it: the Labor Distribution lines sorted by person (with
 a subtotal per person), and — with Fund Line Items loaded — the lines that
@@ -107,11 +108,20 @@ for lines set aside (below).
   they have activity in the period; cash, payables and operating expense
   accounts are left out.
 * **Matching Fund Line Items to Labor Distribution.** A ledger line's
-  *Ref Doc* is the Labor Distribution *Transaction Number*. Lines whose
-  reference matches no transaction are then paired by identical amount
-  (shown as "paired by amount"); what remains on either side is the
-  difference. Credit lines (*Debit/Credit Indicator* = Credit) count as
-  negative.
+  *Ref Doc* is the Labor Distribution *Transaction Number*, so lines are
+  paired by reference only — never by amount alone, which would pair two
+  people paid the same. *Amount* is taken as signed: credits come out
+  negative and reversals as negative debits (on real exports these add up
+  to DetailBalances exactly).
+* **Lines posted to another account.** Accounting re-maps some pay
+  elements when it posts: a longevity payment Labor Distribution charges to
+  512100 Faculty Salaries lands on 512400 Faculty Longevity Pay. A Labor
+  Distribution line missing from its own account is looked up by its
+  transaction number across every account and period in Fund Line Items;
+  if it's found, both rows show it — "posted to 512400 Faculty Longevity
+  Pay" on one, "charged in Labor Distribution to …" on the other — and a
+  row whose whole difference is accounted for this way is marked
+  **Explained — posted to another account** rather than as a difference.
 * **Check on the Fund Line Items report.** For each combination its lines
   should add up to the DetailBalances amount; if not, the page says so —
   the report was probably run for a different date range.
