@@ -246,9 +246,11 @@ class Reconcile(unittest.TestCase):
     def test_no_pairing_by_amount_alone(self):
         """Two people paid the same on one account must not be paired."""
         ld = [{"combo": tuple(A.split("-")), "period": "27-03", "person": "X", "txn": "1",
-               "status": "Success", "amount": 100, "pay_start": "", "pay_element": ""}]
+               "person_number": "", "status": "Success", "amount": 100, "pay_start": "",
+               "pay_element": ""}]
         fli = [{"key": tuple(A.split("-"))[:6], "period": "27-03", "amount": 100,
-                "ref": "2", "posted": "", "doc": "", "line": "", "person": ""}]
+                "ref": "2", "posted": "", "doc": "", "line": "", "person": "Y",
+                "account_name": "", "text": ""}]
         detail = reconcile.reconcile(ld, None, fli)["rows"][0]["fli"]
         self.assertEqual((len(detail["gl_only"]), len(detail["ld_only"])), (1, 1))
 
@@ -267,6 +269,73 @@ class Reconcile(unittest.TestCase):
         lines[0]["status"] = "Error"
         result = reconcile.reconcile(lines)
         self.assertEqual([l["txn"] for l in result["excluded"]], [lines[0]["txn"]])
+
+
+def person(result, name):
+    return next(p for p in result["people"] if p["name"] == name)
+
+
+class ByPerson(unittest.TestCase):
+    def test_each_person_against_their_ledger_lines(self):
+        result, _ = run_demo()
+        self.assertEqual([p["name"] for p in result["people"]],
+                         ["Chen, Wei", "Okafor, Grace", "Rivera, Ana"])
+        chen = person(result, "Chen, Wei")
+        self.assertEqual((chen["status"], chen["ld_total"], chen["gl_total"]), ("match", 210000, 210000))
+        okafor = person(result, "Okafor, Grace")
+        self.assertEqual((okafor["status"], okafor["diff"]), ("mismatch", -120000))
+        [cell] = okafor["cells"]
+        self.assertEqual(sorted(x["kind"] for x in cell["lines"]), ["ld_only", "pair"])
+
+    def test_a_line_posted_to_another_account_is_explained_on_both(self):
+        rivera = person(run_demo()[0], "Rivera, Ana")
+        self.assertEqual((rivera["status"], rivera["diff"]), ("explained", 0))
+        by_account = {(c["combo"].split("-")[1], c["account"]): c for c in rivera["cells"]}
+        salaries, longevity = by_account["1100001", "512100"], by_account["1100001", "512400"]
+        self.assertEqual((salaries["status"], longevity["status"]), ("explained", "explained"))
+        self.assertEqual(by_account["1100017", "512100"]["status"], "match")
+        [moved_in] = [x for x in longevity["lines"] if x["kind"] == "moved_in"]
+        self.assertEqual((moved_in["ld"]["txn"], longevity["account_name"]),
+                         ("30000006", "Faculty Longevity Pay"))
+        # the 27-02 line is outside the periods DetailBalances covers
+        self.assertEqual({c["period"] for c in rivera["cells"]}, {"27-03"})
+
+    def test_journals_are_not_put_under_a_person(self):
+        groups = run_demo()[0]["unattributed"]
+        self.assertEqual(sorted(f["ref"] for g in groups for f in g["lines"]),
+                         ["JE-88213", "JE-88214"])
+        # the payables line on 200010 is not a salary account
+        self.assertNotIn("200010", {g["account"] for g in groups})
+
+    def test_reference_decides_whose_line_it_is(self):
+        """A ledger line whose Ref Doc is someone's LD transaction is theirs,
+        whatever its text says."""
+        found, _ = reconcile.load(demo_files())
+        fli = [dict(f, person="Somebody, Else") if f["ref"] == "30000003" else f
+               for f in found[reconcile.FLI][1]]
+        result = reconcile.reconcile(found[reconcile.LD][1], found[reconcile.GL][1], fli)
+        self.assertEqual(person(result, "Chen, Wei")["status"], "match")
+        self.assertNotIn("Somebody, Else", [p["name"] for p in result["people"]])
+
+    def test_people_only_in_the_ledger_or_only_in_labor_distribution(self):
+        found, _ = reconcile.load(demo_files())
+        ld = [l for l in found[reconcile.LD][1] if l["person"] != "Chen, Wei"]
+        ld.append(dict(ld[0], person="Nobody, Posted", person_number="7", txn="555"))
+        result = reconcile.reconcile(ld, found[reconcile.GL][1], found[reconcile.FLI][1])
+        self.assertEqual(person(result, "Chen, Wei")["status"], "not_in_ld")
+        self.assertEqual(person(result, "Nobody, Posted")["status"], "not_in_ledger")
+
+    def test_funds_fund_line_items_does_not_cover(self):
+        found, _ = reconcile.load(demo_files())
+        ld = found[reconcile.LD][1] + [dict(found[reconcile.LD][1][0], person="Far, Away",
+                                            txn="777", combo=tuple("10-9999999-100100-512100-210-0000-00-0000".split("-")))]
+        result = reconcile.reconcile(ld, None, found[reconcile.FLI][1])
+        self.assertEqual(person(result, "Far, Away")["status"], "not_covered")
+
+    def test_without_fund_line_items_people_are_listed_unchecked(self):
+        result, _ = run_demo((reconcile.LD, reconcile.GL))
+        self.assertEqual({p["status"] for p in result["people"]}, {"unchecked"})
+        self.assertEqual(person(result, "Rivera, Ana")["gl_total"], None)
 
 
 class Xlsx(unittest.TestCase):
@@ -294,10 +363,10 @@ class Xlsx(unittest.TestCase):
         result, _ = run_demo()
         book = reconcile.export_workbook(result, {reconcile.LD: "ld.csv"})
         summary = xlsx.read_rows(book)
-        self.assertEqual(summary[0][0], "Account combination")
-        self.assertEqual(len(summary), 1 + len(result["rows"]) + 1)  # header, rows, total
+        self.assertEqual(summary[0][:3], ["Person", "Person number", "Account combination"])
         names = zipfile.ZipFile(io.BytesIO(book)).read("xl/workbook.xml").decode()
-        for sheet in ("Summary", "Labor Distribution sorted", "Differences", "Not compared"):
+        for sheet in ("By person", "Summary", "Labor Distribution sorted", "Differences",
+                      "Not compared"):
             self.assertIn(sheet, names)
 
 

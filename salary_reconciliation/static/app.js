@@ -10,6 +10,26 @@ const STATUS = {
   posted_elsewhere: "Explained — posted to another account",
   unchecked: "Not compared yet",
 };
+// Person view: a person's status, and the status of each account they were
+// charged to (match / explained / mismatch / not_covered / unchecked).
+const PERSON_STATUS = {
+  match: "Matches",
+  explained: "Explained — posted to another account",
+  mismatch: "Does not match",
+  not_in_ld: "Not in Labor Distribution",
+  not_in_ledger: "Not in the ledger",
+  not_covered: "Fund not in Fund Line Items",
+  unchecked: "Not compared yet",
+};
+const PERSON_OK = ["match", "explained", "unchecked", "not_covered"];
+// The same, shorter, for each account inside a person's breakdown.
+const CELL_STATUS = {
+  match: "Matches",
+  explained: "Explained",
+  mismatch: "Does not match",
+  not_covered: "Not in Fund Line Items",
+  unchecked: "",
+};
 const KIND_NAMES = {
   labor_distribution: "Labor Distribution",
   detail_balances: "DetailBalances",
@@ -18,6 +38,7 @@ const KIND_NAMES = {
 
 let state = null;
 let filter = "all";
+let view = "people";
 const open = new Set();
 
 const $ = (sel) => document.querySelector(sel);
@@ -37,7 +58,7 @@ const moneyCell = (c) => `<td class="num${c < 0 ? " neg" : ""}">${money(c)}</td>
 // 10-1100001-106015-512100-210-0000-00-0000 with fund and GL account picked out
 function comboHtml(combo) {
   const p = combo.split("-");
-  if (p.length !== 8) return `<span class="mono">${esc(combo)}</span>`;
+  if (p.length < 6) return `<span class="mono">${esc(combo)}</span>`;
   return `<span class="mono">${esc(p[0])}-<span class="seg-fund" title="Fund">${esc(p[1])}</span>-${esc(p[2])}-` +
     `<span class="seg-acct" title="GL account">${esc(p[3])}</span>-${esc(p.slice(4).join("-"))}</span>`;
 }
@@ -111,6 +132,22 @@ function render() {
   $("#results").hidden = !res;
   if (!res) return;
 
+  $("#people-view").hidden = view !== "people";
+  $("#accounts-view").hidden = view !== "accounts";
+  document.querySelectorAll("#view-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.view === view));
+  const notes = view === "people" ? peopleHeader(res) : accountsHeader(res);
+  $("#period-note").innerHTML = notes.map(esc).join("<br>");
+  $("#period-note").className = "note info";
+  renderView();
+  renderLeftovers();
+}
+
+function renderView() {
+  view === "people" ? renderPeople() : renderTable();
+}
+
+// Tiles for the account view; returns its notes.
+function accountsHeader(res) {
   const hasGL = res.loaded.detail_balances;
   const c = res.counts;
   const problems = (c.mismatch || 0) + (c.not_in_gl || 0) + (c.gl_only || 0);
@@ -148,11 +185,163 @@ function render() {
     notes.push(`DetailBalances covers ${res.periods.gl.join(", ") || "no periods"}; ` +
                `Labor Distribution lines in ${outsidePeriods.join(", ")} are listed at the bottom and not compared.`);
   }
-  $("#period-note").innerHTML = notes.map(esc).join("<br>");
-  $("#period-note").className = "note info";
 
-  renderTable();
-  renderLeftovers();
+  return notes;
+}
+
+
+// Tiles for the person view; returns its notes.
+function peopleHeader(res) {
+  const c = res.people_counts;
+  const hasFLI = res.loaded.fund_line_items;
+  const compared = res.people.filter((p) => !["unchecked", "not_covered"].includes(p.status));
+  const problems = res.people.filter((p) => !PERSON_OK.includes(p.status)).length;
+  $("#tiles").innerHTML = [
+    tile("People", res.people.length),
+    tile(hasFLI ? "Labor Distribution (compared)" : "Labor Distribution total",
+         money((hasFLI ? compared : res.people).reduce((a, p) => a + p.ld_total, 0))),
+    hasFLI ? tile("Match the ledger", c.match || 0, "good",
+                  c.explained ? `+ ${c.explained} explained by lines posted to another account or period` : "")
+           : tile("Fund Line Items", "not loaded"),
+    hasFLI ? tile("Differences", problems, problems ? "bad" : "good",
+                  problems ? "people whose ledger doesn't line up" : "everyone lines up") : "",
+  ].join("");
+
+  const notes = [];
+  if (!hasFLI) {
+    notes.push("Each person's Labor Distribution, by account. Load Fund Line Items to compare each person " +
+               "with what the ledger posted for them (DetailBalances only has account totals — see By account).");
+  }
+  if (c.not_in_ld) {
+    notes.push(`The ledger has payroll lines for ${plural(c.not_in_ld, "person", "people")} who ` +
+               `${c.not_in_ld === 1 ? "isn't" : "aren't"} in the Labor Distribution file at all — run Labor ` +
+               `Distribution for everyone paid from these funds to compare them.`);
+  }
+  if (c.not_covered) {
+    notes.push(`${plural(c.not_covered, "person is", "people are")} paid only from funds or periods the Fund Line ` +
+               `Items report doesn't include, so ${c.not_covered === 1 ? "isn't" : "aren't"} compared.`);
+  }
+  const offAccounts = res.rows.filter((r) => r.fli && r.fli.covered && !r.fli.agrees_with_gl).length;
+  if (offAccounts) {
+    notes.push(`Fund Line Items doesn't add up to DetailBalances on ${plural(offAccounts, "account combination", "account combinations")} ` +
+               `— it may have been run for a different date range (see By account).`);
+  }
+  if (res.unattributed.length) {
+    notes.push("Ledger entries on salary accounts that aren't anyone's payroll line (journals, transfers) " +
+               "are listed below the people.");
+  }
+  const outsidePeriods = [...new Set(res.outside_periods.map((l) => l.period))];
+  if (outsidePeriods.length) {
+    notes.push(`Labor Distribution lines in ${outsidePeriods.join(", ")} are outside the periods compared ` +
+               `(${res.periods.compared.join(", ")}) and listed at the bottom.`);
+  }
+  return notes;
+}
+
+function personMatches(p, q) {
+  if (filter === "problems" && PERSON_OK.includes(p.status)) return false;
+  if (!q) return true;
+  return p.name.toLowerCase().includes(q) || p.number.includes(q) ||
+    p.cells.some((c) => c.combo.toLowerCase().includes(q) || c.period.includes(q));
+}
+
+function renderPeople() {
+  const res = state.result;
+  const hasFLI = res.loaded.fund_line_items;
+  const q = $("#search").value.trim().toLowerCase();
+  const people = res.people.filter((p) => personMatches(p, q));
+  const key = (p) => "p|" + p.name;
+  $("#people tbody").innerHTML = people.map((p) => {
+    const isOpen = open.has(key(p));
+    const accounts = new Set(p.cells.map((c) => c.combo)).size;
+    return `<tr class="row${isOpen ? " open" : ""}" data-key="${esc(key(p))}">` +
+      `<td class="chev">${isOpen ? "▾" : "▸"}</td>` +
+      `<td><strong>${esc(p.name)}</strong>${p.number ? ` <span class="small-muted mono">${esc(p.number)}</span>` : ""}` +
+      `<div class="small-muted">${plural(accounts, "account", "accounts")}, ` +
+      `${[...new Set(p.cells.map((c) => c.period))].join(", ")}</div></td>` +
+      moneyCell(p.ld_total) +
+      (hasFLI ? moneyCell(p.gl_total) + moneyCell(p.diff) : `<td class="num">—</td><td class="num">—</td>`) +
+      `<td><span class="status ${p.status}">${esc(PERSON_STATUS[p.status])}</span></td></tr>` +
+      (isOpen ? `<tr class="detail"><td colspan="6">${personDetailHtml(p)}</td></tr>` : "");
+  }).join("") || `<tr><td colspan="6" class="small-muted">Nothing to show with this filter.</td></tr>`;
+
+  const counted = people.filter((p) => !["unchecked", "not_covered"].includes(p.status) || !hasFLI);
+  const sum = (f) => counted.reduce((a, p) => a + (f(p) || 0), 0);
+  const skipped = people.length - counted.length;
+  $("#people tfoot").innerHTML = `<tr><td></td><td>Total (${plural(people.length, "person", "people")} shown` +
+    `${skipped ? `; ${skipped} not compared left out` : ""})</td>` + moneyCell(sum((p) => p.ld_total)) +
+    (hasFLI ? moneyCell(sum((p) => p.gl_total)) + moneyCell(sum((p) => p.diff)) : `<td class="num">—</td><td class="num">—</td>`) +
+    `<td></td></tr>`;
+  $("#expand-all").textContent = people.length && people.every((p) => open.has(key(p))) ? "Collapse all" : "Expand all";
+  renderUnattributed();
+}
+
+// One person, per account combination and period: the totals on each side,
+// whether they line up, and the lines underneath.
+function personDetailHtml(p) {
+  const hasFLI = state.result.loaded.fund_line_items;
+  const rows = [];
+  for (const c of p.cells) {
+    rows.push(`<tr class="cell-head"><td>${comboHtml(c.combo)}` +
+      (c.account_name ? `<div class="small-muted">${esc(c.account_name)}</div>` : "") + `</td>` +
+      `<td class="mono">${esc(c.period)}</td><td></td>` + moneyCell(c.ld_total) +
+      (hasFLI && c.status !== "not_covered" ? moneyCell(c.gl_total) + moneyCell(c.diff) : `<td class="num">—</td><td class="num">—</td>`) +
+      `<td>${CELL_STATUS[c.status] ? `<span class="status ${c.status}">${esc(CELL_STATUS[c.status])}</span>` : ""}</td></tr>`);
+    for (const x of c.lines) rows.push(lineHtml(x, c));
+  }
+  return `<table class="person-cells"><thead><tr><th>Account combination / line</th><th>Period</th>` +
+    `<th>Transaction</th><th class="num">Labor Distribution</th><th class="num">Ledger</th>` +
+    `<th class="num">Difference</th><th>Status / note</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+function lineHtml(x, c) {
+  const ld = x.ld, gl = x.gl;
+  const what = ld ? `${ld.pay_element}` : (gl.person ? gl.assignment : (gl.text || gl.header_text));
+  const when = ld ? `${ld.pay_start}–${ld.pay_end}` : gl.posted;
+  const note = {
+    pair: "",
+    amount_differs: "same transaction, different amount",
+    ld_only: "not in the ledger",
+    gl_only: "no Labor Distribution line",
+    moved_out: () => `posted to ${x.other.split("-")[3]} ${x.other_name}` +
+      (x.other_period !== c.period ? ` in ${x.other_period}` : ""),
+    moved_in: () => `charged in Labor Distribution to ${x.other.split("-")[3]}` +
+      (x.other_period !== c.period ? ` in ${x.other_period}` : ""),
+  }[x.kind];
+  const ldAmt = ld && x.kind !== "moved_in" ? ld.amount : null;
+  const glAmt = gl && x.kind !== "moved_out" ? gl.amount : null;
+  return `<tr class="line ${x.kind}"><td>${esc(what)}<div class="small-muted">${esc(when)}</div></td><td></td>` +
+    `<td class="mono">${esc(ld ? ld.txn : gl.ref)}</td>` +
+    (ldAmt === null ? `<td class="num">—</td>` : moneyCell(ldAmt)) +
+    (glAmt === null ? `<td class="num">—</td>` : moneyCell(glAmt)) + `<td></td>` +
+    `<td class="line-note">${esc(typeof note === "function" ? note() : note)}</td></tr>`;
+}
+
+// Ledger entries on salary accounts that aren't anyone's payroll line.
+function renderUnattributed() {
+  const groups = state.result.unattributed;
+  if (!groups.length) { $("#unattributed").innerHTML = ""; return; }
+  const q = $("#search").value.trim().toLowerCase();
+  const shown = groups.filter((g) => !q || g.combo.toLowerCase().includes(q) || g.period.includes(q) ||
+    g.lines.some((f) => (f.text + " " + f.header_text).toLowerCase().includes(q)));
+  const rows = [];
+  for (const g of shown) {
+    rows.push(`<tr class="cell-head"><td>${comboHtml(g.combo)}` +
+      (g.account_name ? `<div class="small-muted">${esc(g.account_name)}</div>` : "") + `</td>` +
+      `<td class="mono">${esc(g.period)}</td><td></td><td></td><td></td>${moneyCell(g.total)}</tr>`);
+    for (const f of g.lines) {
+      rows.push(`<tr class="line"><td>${esc(f.text || f.header_text)}` +
+        (f.text && f.header_text ? `<div class="small-muted">${esc(f.header_text)}</div>` : "") + `</td>` +
+        `<td class="mono">${esc(f.posted)}</td><td>${esc(f.doc_type)}</td><td class="mono">${esc(f.ref)}</td>` +
+        `<td>${esc(f.user)}</td>${moneyCell(f.amount)}</tr>`);
+    }
+  }
+  $("#unattributed").innerHTML = `<details open><summary>Ledger entries on salary accounts that aren't anyone's ` +
+    `payroll line (${plural(groups.reduce((a, g) => a + g.lines.length, 0), "line", "lines")})</summary>` +
+    `<p class="small-muted">Journals, salary transfers and the like: they move money on these accounts without a ` +
+    `person's name, so they can't be put under a person. They explain account totals that differ.</p>` +
+    `<table class="person-cells"><thead><tr><th>Account combination / entry</th><th>Entered</th><th>Document type</th>` +
+    `<th>Reference</th><th>Entered by</th><th class="num">Amount</th></tr></thead><tbody>${rows.join("")}</tbody></table></details>`;
 }
 
 function tile(label, value, cls = "", sub = "") {
@@ -383,6 +572,21 @@ $("#clear-btn").addEventListener("click", async () => {
 
 $("#export-btn").addEventListener("click", () => { window.location = "/api/export"; });
 
+$("#people tbody").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr.row");
+  if (!tr) return;
+  const k = tr.dataset.key;
+  open.has(k) ? open.delete(k) : open.add(k);
+  renderPeople();
+});
+
+$("#view-tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b || b.dataset.view === view) return;
+  view = b.dataset.view;
+  render();
+});
+
 $("#summary tbody").addEventListener("click", (e) => {
   const tr = e.target.closest("tr.row");
   if (!tr) return;
@@ -391,22 +595,24 @@ $("#summary tbody").addEventListener("click", (e) => {
   renderTable();
 });
 
-document.querySelector(".seg").addEventListener("click", (e) => {
+$("#filter-seg").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
   filter = b.dataset.filter;
-  document.querySelectorAll(".seg button").forEach((x) => x.classList.toggle("on", x === b));
-  renderTable();
+  document.querySelectorAll("#filter-seg button").forEach((x) => x.classList.toggle("on", x === b));
+  renderView();
 });
 
-$("#search").addEventListener("input", renderTable);
+$("#search").addEventListener("input", renderView);
 
 $("#expand-all").addEventListener("click", () => {
   const q = $("#search").value.trim().toLowerCase();
-  const keys = state.result.rows.filter((r) => rowMatches(r, q)).map((r) => r.combo + "|" + r.period);
+  const keys = view === "people"
+    ? state.result.people.filter((p) => personMatches(p, q)).map((p) => "p|" + p.name)
+    : state.result.rows.filter((r) => rowMatches(r, q)).map((r) => r.combo + "|" + r.period);
   const allOpen = keys.every((k) => open.has(k));
   keys.forEach((k) => (allOpen ? open.delete(k) : open.add(k)));
-  renderTable();
+  renderView();
 });
 
 loadFolder().catch((e) => renderNotes([e.message]));

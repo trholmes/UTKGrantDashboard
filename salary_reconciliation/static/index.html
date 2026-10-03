@@ -11,7 +11,7 @@
 <header class="topbar">
   <div>
     <h1>Salary Reconciliation</h1>
-    <div class="subtitle">Labor Distribution vs. the General Ledger, by account combination and period</div>
+    <div class="subtitle">Labor Distribution vs. the General Ledger, by person and by account</div>
   </div>
   <div class="topbar-actions">
     <button id="export-btn" class="btn primary" disabled title="Summary, the sorted Labor Distribution with subtotals, and every difference">Download Excel</button>
@@ -56,32 +56,57 @@
   </section>
 
   <section id="results" hidden>
+    <div class="seg views" id="view-tabs" role="tablist" aria-label="View">
+      <button data-view="people" class="on" title="Each person's Labor Distribution against what the ledger posted for them">By person</button>
+      <button data-view="accounts" title="Each account combination's Labor Distribution total against DetailBalances">By account</button>
+    </div>
     <div id="tiles" class="tiles"></div>
     <div id="period-note" class="note"></div>
     <div class="controls">
-      <div class="seg" role="group" aria-label="Show">
+      <div class="seg" id="filter-seg" role="group" aria-label="Show">
         <button data-filter="all" class="on">All</button>
         <button data-filter="problems">Differences only</button>
       </div>
-      <input type="search" id="search" placeholder="Filter by fund, account, person…">
+      <input type="search" id="search" placeholder="Filter by person, fund, account…">
       <button id="expand-all" class="btn small">Expand all</button>
     </div>
-    <div class="table-wrap">
-      <table id="summary">
-        <thead>
-          <tr>
-            <th></th>
-            <th>Account combination</th>
-            <th>Period</th>
-            <th class="num">Labor Distribution</th>
-            <th class="num">DetailBalances</th>
-            <th class="num">Difference</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-        <tfoot></tfoot>
-      </table>
+    <div id="people-view">
+      <div class="table-wrap">
+        <table id="people">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Person</th>
+              <th class="num">Labor Distribution</th>
+              <th class="num">Ledger</th>
+              <th class="num">Difference</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+      <div id="unattributed"></div>
+    </div>
+    <div id="accounts-view" hidden>
+      <div class="table-wrap">
+        <table id="summary">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Account combination</th>
+              <th>Period</th>
+              <th class="num">Labor Distribution</th>
+              <th class="num">DetailBalances</th>
+              <th class="num">Difference</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
     </div>
     <div id="leftovers"></div>
   </section>

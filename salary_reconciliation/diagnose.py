@@ -175,6 +175,17 @@ def main(paths):
     table(Counter(l["pay_element"] for d in det for l in d["ld_only"]), "pay elements")
     say()
 
+    say("People by status:")
+    table(Counter(rc.PERSON_STATUS_TEXT[p["status"]] for p in result["people"]), "statuses")
+    say("Accounts within people, by status:")
+    table(Counter(f"{c['account']} {rc.PERSON_STATUS_TEXT[c['status']]}"
+                  for p in result["people"] for c in p["cells"]), "kinds")
+    say("Ledger lines not anyone's payroll line, by account / document type:")
+    table(Counter(f"{g['account']} {g['account_name']:<30} {f['doc_type']} / "
+                  f"{DOC_NUMBER.sub('', PERIOD_PREFIX.sub('', f['header_text']))}"
+                  for g in result["unattributed"] for f in g["lines"]), "kinds")
+    say()
+
     say("== EVERY COMBINATION THAT ISN'T A PLAIN MATCH (funds left out)")
     say("  period  account  status | LD lines, ledger-only lines, LD-only lines, "
         "posted out, posted in | after those: explained?")

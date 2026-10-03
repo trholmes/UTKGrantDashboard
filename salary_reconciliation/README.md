@@ -62,9 +62,36 @@ the page says so.
 You can also drag files onto the page, or click **Choose files…** — those
 are recognized by their column headings and held in memory only.
 
-For each account combination and period the page shows the Labor
-Distribution total, the DetailBalances period activity, the difference,
-and a status:
+### By person (the main list)
+
+One row per person: what Labor Distribution charged for them, what the
+ledger posted for them, the difference, and a status — *Matches*,
+*Explained — posted to another account*, *Does not match*, *Not in
+Labor Distribution* (the ledger paid them; the Labor Distribution file
+doesn't mention them), *Not in the ledger*, or *Fund not in Fund Line
+Items* (not compared).
+
+Open a person to see each account combination and period they were
+charged to, with Labor Distribution against the ledger and whether they
+line up, and every line underneath: paired by transaction number, or
+marked *not in the ledger*, *no Labor Distribution line*, *same
+transaction, different amount*, or *posted to 512400 Faculty Longevity
+Pay* / *charged in Labor Distribution to 512100* when accounting posted a
+line to a different account than Labor Distribution shows.
+
+The ledger's side of this comes from **Fund Line Items** (DetailBalances
+only has account totals). A ledger line belongs to the person whose Labor
+Distribution transaction its *Ref Doc* names, or else to the person its
+"Accounting for *Name* Assignment name: …" text names. Ledger entries on
+salary accounts that are neither — journals, salary transfers — are
+listed below the people, per account: they're what explains an account
+total that differs when every person lines up.
+
+### By account
+
+The second tab is the account view: for each account combination and
+period, the Labor Distribution total, the DetailBalances period activity,
+the difference, and a status:
 
 | Status | Meaning |
 | --- | --- |
@@ -90,7 +117,8 @@ explain the difference:
   hasn't been accounted yet, or was posted elsewhere.
 * **Same transaction, different amount.**
 
-**Download Excel** saves a workbook with a *Summary* sheet, the *Labor
+**Download Excel** saves a workbook with a *By person* sheet (each person,
+their accounts, and the lines that don't simply pair up), a *Summary* sheet, the *Labor
 Distribution sorted* sheet with subtotal rows (the step 1 result), a
 *Differences* sheet listing every unmatched line, and a *Not compared* sheet
 for lines set aside (below).

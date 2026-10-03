@@ -28,6 +28,7 @@ import csv
 import io
 import re
 import sys
+from collections import Counter
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -436,6 +437,8 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
                                             if f["person"] and f["person"].lower() not in ld_names})
             missing_people.update(d["people_not_in_ld"])
 
+    people, unattributed = by_person(ld_ok, fli_lines, compared_set, salary_account)
+
     compared_rows = [r for r in rows if r["status"] != "gl_not_run"]
     totals = {
         "ld": sum(r["ld_total"] for r in compared_rows),
@@ -451,6 +454,9 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
         "totals": totals,
         "counts": counts,
         "people_not_in_ld": len(missing_people),
+        "people": people,
+        "people_counts": dict(Counter(p["status"] for p in people)),
+        "unattributed": unattributed,
         "outside_periods": sorted(outside, key=lambda l: (l["combo"], _ld_sort_key(l))),
         "excluded": sorted(excluded, key=lambda l: (l["combo"], _ld_sort_key(l))),
     }
@@ -492,6 +498,159 @@ def _posted_elsewhere(rows, fli_lines, claimed):
                 target["fli"]["gl_only"].remove(f)
                 target["fli"]["moved_in"].append({"ld": ld, "gl": f, "from": row["combo"],
                                                   "from_period": row["period"]})
+
+
+def _name_key(name):
+    return re.sub(r"\s+", " ", name).strip().lower()
+
+
+def by_person(ld_lines, fli_lines, compared_set, salary_account):
+    """Each person's Labor Distribution against what the ledger posted for
+    them, per account combination and period.
+
+    The ledger's side comes from Fund Line Items: a line belongs to the
+    person whose Labor Distribution transaction its Ref Doc names, or else
+    to the person its "Accounting for <name>" text names. Ledger lines on
+    salary accounts that are neither (journals, transfers, purchase orders)
+    are returned separately, per account, as `unattributed`.
+
+    fli_lines may be None (not loaded): each person then has their Labor
+    Distribution only, status "unchecked"."""
+    ld_lines = [l for l in ld_lines if l["period"] in compared_set]
+    by_txn = {l["txn"]: l for l in ld_lines if l["txn"]}
+    people = {}
+
+    def person(name, number=""):
+        p = people.setdefault(_name_key(name), {"name": name, "number": "",
+                                                "ld": [], "gl": []})
+        p["number"] = p["number"] or number
+        return p
+
+    for l in ld_lines:
+        person(l["person"], l["person_number"])["ld"].append(l)
+
+    unattributed, coverage, names = {}, set(), {}
+    for f in fli_lines or []:
+        if f["period"] not in compared_set:
+            continue
+        coverage.add((f["key"][1], f["period"]))
+        names.setdefault(f["key"][3], f["account_name"])
+        ld = by_txn.get(f["ref"])
+        if ld is not None:
+            person(ld["person"])["gl"].append(f)
+        elif f["person"]:
+            person(f["person"])["gl"].append(f)
+        elif salary_account(f["key"][3]):
+            unattributed.setdefault((f["key"], f["period"]), []).append(f)
+
+    checked = fli_lines is not None
+    out = []
+    for p in sorted(people.values(), key=lambda p: _name_key(p["name"])):
+        cells = _person_cells(p, coverage, names, checked)
+        compared_cells = [c for c in cells if c["status"] != "not_covered"]
+        ld_total = sum(c["ld_total"] for c in compared_cells)
+        gl_total = sum(c["gl_total"] for c in compared_cells)
+        if not checked:
+            status = "unchecked"
+        elif not compared_cells:
+            status = "not_covered"
+        elif not p["ld"]:
+            status = "not_in_ld"
+        elif gl_total == 0 and not any(c["gl_lines"] for c in compared_cells):
+            status = "not_in_ledger"
+        elif all(c["status"] == "match" for c in compared_cells):
+            status = "match"
+        elif ld_total == gl_total and all(c["status"] in ("match", "explained")
+                                          for c in compared_cells):
+            status = "explained"
+        else:
+            status = "mismatch"
+        out.append({
+            "name": p["name"], "number": p["number"], "status": status,
+            "ld_total": ld_total, "gl_total": gl_total if checked else None,
+            "diff": gl_total - ld_total if checked else None,
+            "cells": cells,
+        })
+    unattributed_out = [{
+        "combo": combo_text(key), "account": key[3], "account_name": names.get(key[3], ""),
+        "period": per, "total": sum(f["amount"] for f in lines),
+        "lines": sorted(lines, key=lambda f: (f["posted"], f["doc"], f["line"])),
+    } for (key, per), lines in sorted(unattributed.items(),
+                                      key=lambda kv: (kv[0][0], period_sort_key(kv[0][1])))]
+    return out, unattributed_out
+
+
+def _person_cells(p, coverage, names, checked):
+    """One person's lines per (account combination, period), each line
+    paired with its other side where there is one."""
+    cells = {}
+
+    def cell(key, per, combo=None):
+        c = cells.setdefault((key, per), {"key": key, "period": per, "combo": None,
+                                          "ld_lines": [], "gl_lines": [], "lines": []})
+        c["combo"] = c["combo"] or combo
+        return c
+
+    for l in p["ld"]:
+        cell(l["combo"][:FLI_SEGMENTS], l["period"], l["combo"])["ld_lines"].append(l)
+    for f in p["gl"]:
+        cell(f["key"], f["period"])["gl_lines"].append(f)
+
+    # Pair lines by transaction number; a pair split across cells is a
+    # line accounting posted to another account (or period).
+    gl_by_ref = {}
+    for f in p["gl"]:
+        gl_by_ref.setdefault(f["ref"], []).append(f)
+    paired = set()
+    for l in sorted(p["ld"], key=_ld_sort_key):
+        here = cells[(l["combo"][:FLI_SEGMENTS], l["period"])]
+        candidates = [f for f in gl_by_ref.get(l["txn"], []) if id(f) not in paired]
+        same = [f for f in candidates if (f["key"], f["period"]) == (here["key"], here["period"])]
+        f = next((f for f in same if f["amount"] == l["amount"]), None) or \
+            next(iter(same), None) or next(iter(candidates), None)
+        if f is None:
+            here["lines"].append({"kind": "ld_only", "ld": l, "gl": None})
+            continue
+        paired.add(id(f))
+        if any(f is x for x in same):
+            here["lines"].append({"kind": "pair" if f["amount"] == l["amount"] else "amount_differs",
+                                  "ld": l, "gl": f})
+        else:
+            there = cells[(f["key"], f["period"])]
+            here["lines"].append({"kind": "moved_out", "ld": l, "gl": f,
+                                  "other": combo_text(f["key"]), "other_period": f["period"],
+                                  "other_name": f["account_name"]})
+            there["lines"].append({"kind": "moved_in", "ld": l, "gl": f,
+                                   "other": combo_text(l["combo"]), "other_period": l["period"]})
+    for f in p["gl"]:
+        if id(f) not in paired:
+            cell(f["key"], f["period"])["lines"].append({"kind": "gl_only", "ld": None, "gl": f})
+
+    out = []
+    for (key, per), c in sorted(cells.items(), key=lambda kv: (kv[0][0], period_sort_key(kv[0][1]))):
+        ld_total = sum(l["amount"] for l in c["ld_lines"])
+        gl_total = sum(f["amount"] for f in c["gl_lines"])
+        moved = (sum(x["gl"]["amount"] for x in c["lines"] if x["kind"] == "moved_in")
+                 - sum(x["ld"]["amount"] for x in c["lines"] if x["kind"] == "moved_out"))
+        if not checked:
+            status = "unchecked"
+        elif not c["gl_lines"] and (key[1], per) not in coverage:
+            status = "not_covered"  # Fund Line Items wasn't run for this fund
+        elif gl_total == ld_total:
+            status = "match"
+        elif moved and gl_total - ld_total == moved:
+            status = "explained"
+        else:
+            status = "mismatch"
+        c["lines"].sort(key=lambda x: (x["ld"] or {}).get("pay_element", "") or (x["gl"] or {}).get("text", ""))
+        out.append({
+            "combo": combo_text(c["combo"] or key), "account": key[3],
+            "account_name": names.get(key[3], ""), "period": per,
+            "ld_total": ld_total, "gl_total": gl_total, "diff": gl_total - ld_total,
+            "status": status, "lines": c["lines"],
+            "ld_lines": len(c["ld_lines"]), "gl_lines": len(c["gl_lines"]),
+        })
+    return out
 
 
 def _fli_detail(combo, per, ld_lines_b, gl_total, fli_index, fli_coverage, claimed):
@@ -644,6 +803,17 @@ STATUS_TEXT = {
 }
 
 
+PERSON_STATUS_TEXT = {
+    "match": "Matches",
+    "explained": "Explained: posted to another account/period",
+    "mismatch": "Does not match",
+    "not_in_ld": "Not in Labor Distribution",
+    "not_in_ledger": "Not in the ledger",
+    "not_covered": "Not compared: fund not in Fund Line Items",
+    "unchecked": "Not compared (no Fund Line Items)",
+}
+
+
 def _amt(c, style=xlsx.MONEY):
     return (round(c / 100, 2), style) if c is not None else ""
 
@@ -726,7 +896,52 @@ def export_workbook(result, sources=None):
                                g["posted"], f"{m['ld']['person']} — {m['ld']['pay_element']}",
                                _amt(g["amount"]), g["ref"], g["doc"], g["doc_type"], g["user"]])
 
+    person_sheet = [["Person", "Person number", "Account combination", "Account", "Period",
+                     "Line", "Transaction / reference", "Labor Distribution", "Ledger",
+                     "Difference", "Status / note"]]
+    checked = result["loaded"][FLI]
+    for p in result["people"]:
+        person_sheet.append([(p["name"], xlsx.BOLD), p["number"], "", "", "", "", "",
+                             _amt(p["ld_total"], xlsx.MONEY_BOLD),
+                             _amt(p["gl_total"], xlsx.MONEY_BOLD) if checked else "",
+                             _amt(p["diff"], xlsx.MONEY_BOLD) if checked else "",
+                             (PERSON_STATUS_TEXT[p["status"]], xlsx.BOLD)])
+        for c in p["cells"]:
+            compared = checked and c["status"] != "not_covered"
+            person_sheet.append([p["name"], p["number"], c["combo"], c["account_name"], c["period"],
+                                 "", "", _amt(c["ld_total"]),
+                                 _amt(c["gl_total"]) if compared else "",
+                                 _amt(c["diff"]) if compared else "",
+                                 PERSON_STATUS_TEXT[c["status"]]])
+            # the lines that don't simply pair up
+            for x in c["lines"]:
+                if x["kind"] == "pair":
+                    continue
+                ld, gl = x["ld"], x["gl"]
+                note = {"amount_differs": "Same transaction, different amount",
+                        "ld_only": "Not in the ledger",
+                        "gl_only": "No Labor Distribution line",
+                        "moved_out": f"Posted to {x.get('other', '')} {x.get('other_name', '')}"
+                                     f" ({x.get('other_period', '')})",
+                        "moved_in": f"Charged in Labor Distribution to {x.get('other', '')}"
+                                    f" ({x.get('other_period', '')})"}[x["kind"]]
+                person_sheet.append([p["name"], p["number"], c["combo"], c["account_name"],
+                                     c["period"],
+                                     ld["pay_element"] if ld else (gl["assignment"] or gl["text"]),
+                                     ld["txn"] if ld else gl["ref"],
+                                     _amt(ld["amount"]) if ld and x["kind"] != "moved_in" else "",
+                                     _amt(gl["amount"]) if gl and x["kind"] != "moved_out" else "",
+                                     "", note])
+    for g in result["unattributed"]:
+        for f in g["lines"]:
+            person_sheet.append(["(not anyone's payroll line)", "", g["combo"], g["account_name"],
+                                 g["period"], f["text"] or f["header_text"], f["ref"], "",
+                                 _amt(f["amount"]), "", f"{f['doc_type']}, entered by {f['user']}"
+                                 if f["user"] else f["doc_type"]])
+
     sheets = [
+        {"name": "By person", "rows": person_sheet,
+         "widths": [26, 13, 40, 26, 8, 40, 20, 18, 14, 14, 44]},
         {"name": "Summary", "rows": summary,
          "widths": [40, 10, 11, 10, 9, 9, 8, 18, 16, 14, 30, 8, 14, 14]},
         {"name": "Labor Distribution sorted", "rows": ld_sheet,
