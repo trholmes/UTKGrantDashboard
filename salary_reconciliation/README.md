@@ -31,7 +31,9 @@ Fund Line Items explains each difference line by line.
    small black window stays open while it runs, and your browser opens to
    the page. Close that window to stop.
 
-On a Mac or Linux: `python3 server.py`.
+On a Mac, double-click **`Start Salary Reconciliation.command`** instead
+(the first time, macOS may want you to right-click it → *Open*). On Linux:
+`python3 server.py`.
 
 ## Using it
 

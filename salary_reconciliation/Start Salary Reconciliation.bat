@@ -8,17 +8,19 @@ cd /d "%~dp0"
 rem The "py" launcher comes with the python.org installer; plain "python"
 rem covers other installs. A bare Windows has a "python" stub that only
 rem opens the Microsoft Store, so each is checked by asking for its version.
+rem (The runs stay outside ( ) blocks: a ")" in an argument would end one.)
 py -3 --version >nul 2>nul
-if not errorlevel 1 (
-    py -3 server.py %*
-    goto :finished
-)
-python --version >nul 2>nul
-if not errorlevel 1 (
-    python server.py %*
-    goto :finished
-)
+if errorlevel 1 goto :try_python
+py -3 server.py %*
+goto :finished
 
+:try_python
+python --version >nul 2>nul
+if errorlevel 1 goto :no_python
+python server.py %*
+goto :finished
+
+:no_python
 echo.
 echo   Python 3 was not found on this computer.
 echo.
