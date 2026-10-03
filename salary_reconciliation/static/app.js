@@ -138,6 +138,11 @@ function render() {
                `so ${plural(c.gl_not_run, "combination", "combinations")} there aren't compared — run it for ` +
                `${funds.length > 1 ? "those funds" : "that fund"} too to check them.`);
   }
+  if (res.people_not_in_ld) {
+    notes.push(`The ledger has payroll lines for ${plural(res.people_not_in_ld, "person", "people")} who ` +
+               `${res.people_not_in_ld === 1 ? "isn't" : "aren't"} in the Labor Distribution file at all, so their ` +
+               `lines show as ledger-only. Run Labor Distribution for everyone paid from these funds to compare them.`);
+  }
   const outsidePeriods = [...new Set(res.outside_periods.map((l) => l.period))];
   if (hasGL && outsidePeriods.length) {
     notes.push(`DetailBalances covers ${res.periods.gl.join(", ") || "no periods"}; ` +
@@ -223,7 +228,12 @@ function explainHtml(r) {
     out.push(`<div class="note">Fund Line Items for this combination add up to ${money(fli.total)}, but DetailBalances shows ${money(r.gl_total ?? 0)} — it may have been run for a different date range, so the lists below may be incomplete.</div>`);
   }
   if (fli.gl_only.length) {
-    out.push(`<h3>In the ledger, not in Labor Distribution (${fli.gl_only.length})</h3>` + glTable(fli.gl_only));
+    const missing = fli.people_not_in_ld || [];
+    out.push(`<h3>In the ledger, not in Labor Distribution (${fli.gl_only.length})</h3>` +
+      (missing.length ? `<p class="explain">${plural(missing.length, "person", "people")} paid here in the ledger ` +
+        `${missing.length === 1 ? "isn't" : "aren't"} in the Labor Distribution file at all — it was probably run for ` +
+        `fewer people than are paid from this account.</p>` : "") +
+      glTable(fli.gl_only));
   }
   if (fli.ld_only.length) {
     out.push(`<h3>In Labor Distribution, not in the ledger (${fli.ld_only.length})</h3>` + ldTable(fli.ld_only, false));
@@ -288,13 +298,30 @@ function ldTable(lines, subtotals) {
     `<th>Transaction</th><th class="num">Line %</th><th class="num">Amount</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
 
+// Ledger lines, grouped by whose pay they are (lines that aren't anyone's
+// pay — journals, transfers — come first), with a subtotal per person.
 function glTable(lines) {
-  return `<table><thead><tr><th>Entered</th><th>Description</th><th>Document type</th><th>Reference</th>` +
-    `<th>Entered by</th><th class="num">Amount</th></tr></thead><tbody>` +
-    lines.map((f) => `<tr><td class="mono">${esc(f.posted)}</td><td>${esc(f.text || f.header_text)}` +
-      (f.text && f.header_text ? `<div class="small-muted">${esc(f.header_text)}</div>` : "") +
-      `</td><td>${esc(f.doc_type)}</td><td class="mono">${esc(f.ref)}</td><td>${esc(f.user)}</td>` +
-      moneyCell(f.amount) + `</tr>`).join("") + `</tbody></table>`;
+  const rows = [];
+  let i = 0;
+  while (i < lines.length) {
+    let j = i;
+    while (j < lines.length && lines[j].person === lines[i].person) j++;
+    for (const f of lines.slice(i, j)) {
+      const what = f.person ? f.assignment : (f.text || f.header_text);
+      const sub = f.person ? f.header_text : (f.text && f.header_text ? f.header_text : "");
+      rows.push(`<tr><td>${f.person ? esc(f.person) : `<span class="small-muted">—</span>`}</td>` +
+        `<td>${esc(what)}${sub ? `<div class="small-muted">${esc(sub)}</div>` : ""}</td>` +
+        `<td class="mono">${esc(f.posted)}</td><td>${esc(f.doc_type)}</td><td class="mono">${esc(f.ref)}</td>` +
+        `<td>${esc(f.user)}</td>${moneyCell(f.amount)}</tr>`);
+    }
+    if (lines[i].person && j - i > 1) {
+      const total = lines.slice(i, j).reduce((a, f) => a + f.amount, 0);
+      rows.push(`<tr class="person-sub"><td colspan="6">${esc(lines[i].person)} subtotal</td>${moneyCell(total)}</tr>`);
+    }
+    i = j;
+  }
+  return `<table><thead><tr><th>Person</th><th>Assignment / description</th><th>Entered</th><th>Document type</th>` +
+    `<th>Reference</th><th>Entered by</th><th class="num">Amount</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
 
 function renderLeftovers() {

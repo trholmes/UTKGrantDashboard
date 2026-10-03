@@ -222,12 +222,33 @@ class Reconcile(unittest.TestCase):
         self.assertEqual((came["from"], e["fli"]["gl_only"], e["fli"]["unexplained"]), (A, [], 0))
         self.assertEqual(result["counts"]["mismatch"], 2)  # B and C stay unexplained
 
+    def test_ledger_lines_know_whose_pay_they_are(self):
+        found, _ = reconcile.load(demo_files())
+        fli = found[reconcile.FLI][1]
+        a6 = tuple(A.split("-"))[:6]
+        stranger = dict(next(f for f in fli if f["key"] == a6), ref="99999999",
+                        text="Accounting for Guidry, Michael Assignment name: Professor")
+        stranger.update(person="Guidry, Michael", assignment="Professor")
+        parsed = reconcile.parse_fli(
+            [make_demo.FLI_HEADER, ["2027", "3", "", "1", "", "", "", "10", "", "10", "", "1100001", "",
+                                    "106015", "", "210", "", "512100", "", "0000", "",
+                                    stranger["text"], "", "S", "", "", "", "", "", "", "1",
+                                    "Project Accounting", "Debit", "Actual"]], 0)[0]
+        self.assertEqual((parsed["person"], parsed["assignment"]), ("Guidry, Michael", "Professor"))
+        result = reconcile.reconcile(found[reconcile.LD][1], found[reconcile.GL][1], fli + [stranger])
+        a = row(result, A)["fli"]
+        self.assertEqual([f["person"] for f in a["gl_only"]], ["Guidry, Michael"])
+        self.assertEqual(a["people_not_in_ld"], ["Guidry, Michael"])
+        self.assertEqual(result["people_not_in_ld"], 1)
+        # people who are in the Labor Distribution file don't count
+        self.assertEqual(row(result, B)["fli"]["people_not_in_ld"], [])
+
     def test_no_pairing_by_amount_alone(self):
         """Two people paid the same on one account must not be paired."""
         ld = [{"combo": tuple(A.split("-")), "period": "27-03", "person": "X", "txn": "1",
                "status": "Success", "amount": 100, "pay_start": "", "pay_element": ""}]
         fli = [{"key": tuple(A.split("-"))[:6], "period": "27-03", "amount": 100,
-                "ref": "2", "posted": "", "doc": "", "line": ""}]
+                "ref": "2", "posted": "", "doc": "", "line": "", "person": ""}]
         detail = reconcile.reconcile(ld, None, fli)["rows"][0]["fli"]
         self.assertEqual((len(detail["gl_only"]), len(detail["ld_only"])), (1, 1))
 

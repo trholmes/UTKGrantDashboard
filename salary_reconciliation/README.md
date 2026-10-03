@@ -80,7 +80,12 @@ a subtotal per person), and — with Fund Line Items loaded — the lines that
 explain the difference:
 
 * **In the ledger, not in Labor Distribution** — e.g. a salary transfer or
-  correcting journal entry.
+  correcting journal entry. Entries that aren't anyone's pay come first,
+  then payroll lines grouped by person (read from the line's "Accounting
+  for *Name* Assignment name: …" text) with a subtotal each. An account
+  combination holds everyone paid from it, so a Labor Distribution report
+  run for fewer people than the ledger covers leaves the others here; the
+  page says how many people that is.
 * **In Labor Distribution, not in the ledger** — e.g. a payroll line that
   hasn't been accounted yet, or was posted elsewhere.
 * **Same transaction, different amount.**

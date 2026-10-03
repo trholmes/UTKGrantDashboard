@@ -240,6 +240,11 @@ def parse_gl(rows, at):
     return lines, missing
 
 
+# A payroll line's text in Fund Line Items:
+# "Accounting for Holmes, Tova Assignment name: Associate Professor"
+LABOR_TEXT = re.compile(r"Accounting for (.+?)\s+Assignment name:\s*(.*)$")
+
+
 def parse_fli(rows, at):
     lines = []
     for r in _records(rows, at):
@@ -250,6 +255,8 @@ def parse_fli(rows, at):
             fiscal = f"{year % 100:02d}-{per:02d}"
         except (TypeError, ValueError):
             fiscal = ""
+        text = _clean(r.get("SPL Doc Line Item Txt"))
+        labor = LABOR_TEXT.match(text)
         key = (segment(r.get("Entity ID"), 2), segment(r.get("Fund"), 7),
                segment(r.get("Department ID"), 6), segment(r.get("GL Account"), 6),
                segment(r.get("Program ID"), 3), segment(r.get("Activity Code"), 4))
@@ -263,7 +270,10 @@ def parse_fli(rows, at):
             "doc": _clean(r.get("FI_DocNo")),
             "line": _clean(r.get("LnItm")),
             "posted": _clean(r.get("Entry dte") or r.get("Pstng Date")),
-            "text": _clean(r.get("SPL Doc Line Item Txt")),
+            "text": text,
+            # whose pay it is, for payroll lines ('' for anything else)
+            "person": labor.group(1) if labor else "",
+            "assignment": labor.group(2) if labor else "",
             "header_text": _clean(r.get("Document Header Text")),
             "doc_type": _clean(r.get("Document Type")),
             "ref": _clean(r.get("Ref Doc")),
@@ -415,6 +425,17 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
                     and (d["moved_out"] or d["moved_in"]) and d["unexplained"] == 0):
                 row["status"] = "posted_elsewhere"
 
+    # People the ledger paid from these accounts whom the Labor Distribution
+    # file doesn't mention at all: it was run for fewer people (or funds).
+    ld_names = {l["person"].lower() for l in ld_ok}
+    missing_people = set()
+    for row in rows:
+        d = row["fli"]
+        if d and d.get("covered"):
+            d["people_not_in_ld"] = sorted({f["person"] for f in d["gl_only"]
+                                            if f["person"] and f["person"].lower() not in ld_names})
+            missing_people.update(d["people_not_in_ld"])
+
     compared_rows = [r for r in rows if r["status"] != "gl_not_run"]
     totals = {
         "ld": sum(r["ld_total"] for r in compared_rows),
@@ -429,6 +450,7 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
         "rows": rows,
         "totals": totals,
         "counts": counts,
+        "people_not_in_ld": len(missing_people),
         "outside_periods": sorted(outside, key=lambda l: (l["combo"], _ld_sort_key(l))),
         "excluded": sorted(excluded, key=lambda l: (l["combo"], _ld_sort_key(l))),
     }
@@ -480,7 +502,10 @@ def _fli_detail(combo, per, ld_lines_b, gl_total, fli_index, fli_coverage, claim
     matched, amount_differs, gl_only, ld_only = _match_fli(ld_lines_b, fli)
     claimed.update(id(m["gl"]) for m in matched + amount_differs)
     fli_total = sum(f["amount"] for f in fli)
-    gl_only.sort(key=lambda f: (f["posted"], f["doc"], f["line"]))
+    # entries that aren't anyone's pay (journals, transfers) first, then
+    # payroll lines by person, like the Labor Distribution side
+    gl_only.sort(key=lambda f: (f["person"] != "", f["person"].lower(),
+                                f["posted"], f["doc"], f["line"]))
     ld_only.sort(key=_ld_sort_key)
     return {
         "covered": True,
@@ -669,7 +694,9 @@ def export_workbook(result, sources=None):
             continue
         for f in fli["gl_only"]:
             diff_sheet.append([r["combo"], r["period"], "In ledger, not in Labor Distribution",
-                               f["posted"], f["text"] or f["header_text"], _amt(f["amount"]),
+                               f["posted"],
+                               f"{f['person']} — {f['assignment']}" if f["person"]
+                               else f["text"] or f["header_text"], _amt(f["amount"]),
                                f["ref"], f["doc"], f["doc_type"], f["user"]])
         for l in fli["ld_only"]:
             diff_sheet.append([r["combo"], r["period"], "In Labor Distribution, not in ledger",
