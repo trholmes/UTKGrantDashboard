@@ -103,10 +103,12 @@ for lines set aside (below).
   period(s).
 * **Which ledger rows count.** DetailBalances covers every account.
   Combinations Labor Distribution charged are always compared. Other rows
-  are only included if their account is in the same family (first two
-  digits — `512100` brings in `51xxxx`) as an account payroll charged and
-  they have activity in the period; cash, payables and operating expense
-  accounts are left out.
+  are only included if they have activity in the period and their account
+  is in the same family (first two digits — `512100` brings in `51xxxx`)
+  as an account payroll charged, or is one of the extra salary accounts
+  listed at the top of `reconcile.py` (`EXTRA_SALARY_ACCOUNTS`; for now
+  `537600` Joint Faculty Salaries). Fringe (`528100`), cash, payables and
+  operating expense accounts are left out.
 * **Matching Fund Line Items to Labor Distribution.** A ledger line's
   *Ref Doc* is the Labor Distribution *Transaction Number*, so lines are
   paired by reference only — never by amount alone, which would pair two

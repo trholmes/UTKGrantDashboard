@@ -55,6 +55,11 @@ SIGNATURES = {
     FLI: ("FI_DocNo", "GL Account", "Amount", "Ref Doc"),
 }
 HEADER_SEARCH_ROWS = 30
+# Salary accounts outside the family of the ones payroll charges (see
+# reconcile()): compared too whenever the ledger shows activity on them.
+EXTRA_SALARY_ACCOUNTS = {
+    "537600",  # Joint Faculty Salaries
+}
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
@@ -322,9 +327,14 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
     compared_set = set(compared)
     outside = [l for l in ld_ok if l["period"] not in compared_set]
 
-    # Salary-type accounts: the ones payroll charged, and their family
-    # (same first two digits — 512100 Faculty Salaries brings in 51xxxx).
+    # Salary-type accounts: the ones payroll charged, their family (same
+    # first two digits — 512100 Faculty Salaries brings in 51xxxx), and
+    # EXTRA_SALARY_ACCOUNTS.
     salary_families = {l["combo"][3][:2] for l in ld_ok}
+
+    def salary_account(account):
+        return account[:2] in salary_families or account in EXTRA_SALARY_ACCOUNTS
+
     buckets = {}
 
     def bucket(combo, per):
@@ -339,7 +349,7 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
         # behind it is the other half of the question; other accounts
         # (cash, revenue, operating expense) are not.
         if (g["combo"], g["period"]) in buckets or (
-                g["combo"][3][:2] in salary_families and g["activity"] != 0):
+                salary_account(g["combo"][3]) and g["activity"] != 0):
             b = bucket(g["combo"], g["period"])
             b["gl_total"] = (b["gl_total"] or 0) + g["activity"]
 

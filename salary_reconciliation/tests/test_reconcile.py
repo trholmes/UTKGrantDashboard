@@ -172,6 +172,17 @@ class Reconcile(unittest.TestCase):
         self.assertEqual([l["txn"] for l in result["outside_periods"]], ["29000001"])
         self.assertEqual(result["periods"]["compared"], ["27-03"])
 
+    def test_extra_salary_accounts_are_compared(self):
+        found, _ = reconcile.load(demo_files()[:2])
+        joint = "10-1100001-106015-537600-210-0000-00-0000"
+        travel = "10-1100001-106015-531100-210-0000-00-0000"
+        gl = found[reconcile.GL][1] + [
+            {"combo": tuple(c.split("-")), "period": "27-03", "beginning": 0,
+             "activity": 120000, "ending": 120000} for c in (joint, travel)]
+        result = reconcile.reconcile(found[reconcile.LD][1], gl)
+        self.assertEqual(row(result, joint)["status"], "gl_only")  # Joint Faculty Salaries
+        self.assertFalse(any(r["combo"] == travel for r in result["rows"]))
+
     def test_fund_line_items_find_what_is_missing(self):
         result, _ = run_demo()
         b = row(result, B)["fli"]

@@ -126,7 +126,7 @@ def main(paths):
         for acct in sorted(by_acct):
             n, combos = by_acct[acct]
             say(f"  {n:>4}  {len(combos):>6}  {acct}   "
-                f"{'yes' if acct[:2] in families else 'no ':<15}  "
+                f"{'yes' if acct[:2] in families or acct in rc.EXTRA_SALARY_ACCOUNTS else 'no ':<15}  "
                 f"{'yes' if acct in ld_accounts else 'no ':<13}  {names.get(acct, '')}")
         other = sum(1 for g in gl if not g["combo"][3].startswith("5") and g["activity"] != 0)
         say(f"  other (non-5xxxxx) rows with activity: {other}")
