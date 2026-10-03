@@ -172,6 +172,21 @@ class Reconcile(unittest.TestCase):
         self.assertEqual([l["txn"] for l in result["outside_periods"]], ["29000001"])
         self.assertEqual(result["periods"]["compared"], ["27-03"])
 
+    def test_funds_detail_balances_was_not_run_for_are_not_differences(self):
+        found, _ = reconcile.load(demo_files()[:2])
+        ld = found[reconcile.LD][1]
+        other_fund = "10-2200999-100100-512100-210-0000-00-0000"
+        same_fund = "10-1100001-106015-512200-210-0000-00-0000"  # fund in the report
+        for combo, txn in ((other_fund, "91"), (same_fund, "92")):
+            ld.append(dict(ld[0], combo=tuple(combo.split("-")), txn=txn))
+        result = reconcile.reconcile(ld, found[reconcile.GL][1])
+        r = row(result, other_fund)
+        self.assertEqual((r["status"], r["diff"]), ("gl_not_run", None))
+        self.assertEqual(row(result, same_fund)["status"], "not_in_gl")
+        # left out of the compared totals
+        self.assertEqual(result["totals"]["ld"],
+                         sum(x["ld_total"] for x in result["rows"] if x["combo"] != other_fund))
+
     def test_extra_salary_accounts_are_compared(self):
         found, _ = reconcile.load(demo_files()[:2])
         joint = "10-1100001-106015-537600-210-0000-00-0000"

@@ -5,6 +5,7 @@ const STATUS = {
   match: "Matches",
   mismatch: "Does not match",
   not_in_gl: "Not in DetailBalances",
+  gl_not_run: "Fund not in DetailBalances",
   gl_only: "Ledger only — no Labor Distribution",
   posted_elsewhere: "Explained — posted to another account",
   unchecked: "Not compared yet",
@@ -131,6 +132,12 @@ function render() {
   } else if (problems && !res.loaded.fund_line_items) {
     notes.push("Some combinations don't match. Load Fund Line Items to see which lines are missing on which side.");
   }
+  if (c.gl_not_run) {
+    const funds = [...new Set(res.rows.filter((r) => r.status === "gl_not_run").map((r) => r.segments.fund))];
+    notes.push(`DetailBalances doesn't include fund${funds.length > 1 ? "s" : ""} ${funds.join(", ")}, ` +
+               `so ${plural(c.gl_not_run, "combination", "combinations")} there aren't compared — run it for ` +
+               `${funds.length > 1 ? "those funds" : "that fund"} too to check them.`);
+  }
   const outsidePeriods = [...new Set(res.outside_periods.map((l) => l.period))];
   if (hasGL && outsidePeriods.length) {
     notes.push(`DetailBalances covers ${res.periods.gl.join(", ") || "no periods"}; ` +
@@ -149,7 +156,7 @@ function tile(label, value, cls = "", sub = "") {
 }
 
 function rowMatches(r, q) {
-  if (filter === "problems" && ["match", "unchecked", "posted_elsewhere"].includes(r.status)) return false;
+  if (filter === "problems" && ["match", "unchecked", "posted_elsewhere", "gl_not_run"].includes(r.status)) return false;
   if (!q) return true;
   if (r.combo.toLowerCase().includes(q) || r.period.includes(q)) return true;
   return r.ld_lines.some((l) => l.person.toLowerCase().includes(q) || l.person_number.includes(q));
@@ -167,15 +174,18 @@ function renderTable() {
       `<td>${comboHtml(r.combo)}<div class="small-muted">${plural(r.ld_people, "person", "people")}, ${plural(r.ld_lines.length, "line", "lines")}</div></td>` +
       `<td class="mono">${esc(r.period)}</td>` +
       moneyCell(r.ld_total) +
-      `<td class="num">${res.loaded.detail_balances ? money(r.gl_total ?? 0) : "—"}</td>` +
+      `<td class="num">${res.loaded.detail_balances && r.status !== "gl_not_run" ? money(r.gl_total ?? 0) : "—"}</td>` +
       (r.diff === null ? `<td class="num">—</td>` : moneyCell(r.diff)) +
       `<td><span class="status ${r.status}">${esc(STATUS[r.status])}</span></td></tr>` +
       (isOpen ? `<tr class="detail"><td colspan="7">${detailHtml(r)}</td></tr>` : "");
   }).join("") || `<tr><td colspan="7" class="small-muted">Nothing to show with this filter.</td></tr>`;
 
   const shown = rows.map(([r]) => r);
-  const sum = (f) => shown.reduce((a, r) => a + (f(r) || 0), 0);
-  $("#summary tfoot").innerHTML = `<tr><td></td><td>Total (${shown.length} shown)</td><td></td>` +
+  const compared = shown.filter((r) => r.status !== "gl_not_run");
+  const sum = (f) => compared.reduce((a, r) => a + (f(r) || 0), 0);
+  const skipped = shown.length - compared.length;
+  $("#summary tfoot").innerHTML = `<tr><td></td><td>Total (${shown.length} shown` +
+    `${skipped ? `; ${skipped} not compared left out` : ""})</td><td></td>` +
     moneyCell(sum((r) => r.ld_total)) +
     `<td class="num">${res.loaded.detail_balances ? money(sum((r) => r.gl_total)) : "—"}</td>` +
     (res.loaded.detail_balances ? moneyCell(sum((r) => r.diff)) : `<td class="num">—</td>`) +
@@ -186,7 +196,11 @@ function renderTable() {
 function detailHtml(r) {
   const parts = [];
   const res = state.result;
-  if (res.loaded.detail_balances && r.status !== "match") {
+  if (r.status === "gl_not_run") {
+    parts.push(`<p class="explain">The DetailBalances report that's loaded has no rows at all for fund ` +
+      `<strong>${esc(r.segments.fund)}</strong>, department ${esc(r.segments.department)} in ${esc(r.period)} — ` +
+      `it was run for other funds. Run it for this fund to compare these lines.</p>`);
+  } else if (res.loaded.detail_balances && r.status !== "match") {
     parts.push(explainHtml(r));
   }
   parts.push(`<h3>Labor Distribution lines, by person</h3>` + ldTable(r.ld_lines, true));

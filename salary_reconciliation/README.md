@@ -72,6 +72,7 @@ and a status:
 | **Does not match** | Both have amounts, and they differ. |
 | **Not in DetailBalances** | Payroll charged this combination; the ledger report has no row for it. |
 | **Ledger only** | The ledger shows salary-type activity on a combination no Labor Distribution line was charged to. |
+| **Fund not in DetailBalances** | Not compared: the DetailBalances report has no rows at all for this fund and department in the period, so it wasn't run for it. Not counted as a difference. |
 | **Explained — posted to another account** | The whole difference is lines accounting posted to a different GL account (or period) than Labor Distribution shows — see below. |
 
 Click a row to open it: the Labor Distribution lines sorted by person (with

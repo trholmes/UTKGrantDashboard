@@ -27,6 +27,7 @@ import reconcile as rc  # noqa: E402
 
 OUT = []
 PERIOD_PREFIX = re.compile(r"^\d{2}-\d{2}\s*")  # '27-03 Salary Transfer'
+DOC_NUMBER = re.compile(r"\s*\d{6,}$")  # 'Purchase Order 300000000333260'
 
 
 def say(text=""):
@@ -165,10 +166,11 @@ def main(paths):
                   f"{' (period ' + m['to_period'] + ')' if m['to_period'] != m['ld']['period'] else ''}"
                   f" | {m['ld']['pay_element']}"
                   for d in det for m in d["moved_out"]), "kinds")
-    say("Ledger lines with no LD line, by Document Type / Document Header Text "
-        "(period prefix removed):")
-    table(Counter(f["doc_type"] + " / " + PERIOD_PREFIX.sub("", f["header_text"])
-                  for d in det for f in d["gl_only"]), "kinds")
+    say("Ledger lines with no LD line, by account, Document Type / Document Header Text "
+        "[Record Type] (period prefix and document numbers removed):")
+    table(Counter(f"{f['key'][3]} {f['account_name']:<30} {f['doc_type']} / "
+                  f"{DOC_NUMBER.sub('', PERIOD_PREFIX.sub('', f['header_text']))} [{f['record_type']}]"
+                  for d in det for f in d["gl_only"]), "kinds", limit=100)
     say("LD lines missing from the ledger, by pay element:")
     table(Counter(l["pay_element"] for d in det for l in d["ld_only"]), "pay elements")
     say()

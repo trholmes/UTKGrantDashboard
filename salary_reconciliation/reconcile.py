@@ -269,6 +269,7 @@ def parse_fli(rows, at):
             "ref": _clean(r.get("Ref Doc")),
             "user": _clean(r.get("User Name")),
             "record": _clean(r.get("Record No.")),
+            "record_type": _clean(r.get("Record Type")),
         })
     return lines
 
@@ -353,6 +354,12 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
             b = bucket(g["combo"], g["period"])
             b["gl_total"] = (b["gl_total"] or 0) + g["activity"]
 
+    # The funds the DetailBalances report was run for. It lists every
+    # account of a fund it covers (zero balances included), so a fund and
+    # department with no row at all in a period is outside the report, not
+    # a missing posting.
+    gl_scope = {(g["combo"][:3], g["period"]) for g in gl_lines or []}
+
     fli_index, fli_coverage, claimed = {}, set(), set()
     for f in fli_lines or []:
         fli_index.setdefault((f["key"], f["period"]), []).append(f)
@@ -375,7 +382,9 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
             "status": "unchecked",
             "fli": None,
         }
-        if gl_lines is not None:
+        if gl_lines is not None and (combo[:3], per) not in gl_scope:
+            row["status"] = "gl_not_run"
+        elif gl_lines is not None:
             gl_total = b["gl_total"] or 0
             row["diff"] = gl_total - ld_total
             if row["diff"] == 0:
@@ -406,9 +415,10 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
                     and (d["moved_out"] or d["moved_in"]) and d["unexplained"] == 0):
                 row["status"] = "posted_elsewhere"
 
+    compared_rows = [r for r in rows if r["status"] != "gl_not_run"]
     totals = {
-        "ld": sum(r["ld_total"] for r in rows),
-        "gl": sum(r["gl_total"] or 0 for r in rows) if gl_lines is not None else None,
+        "ld": sum(r["ld_total"] for r in compared_rows),
+        "gl": sum(r["gl_total"] or 0 for r in compared_rows) if gl_lines is not None else None,
     }
     counts = {}
     for r in rows:
@@ -602,6 +612,7 @@ STATUS_TEXT = {
     "match": "Matches",
     "mismatch": "Does not match",
     "not_in_gl": "Not in DetailBalances",
+    "gl_not_run": "Not compared: fund not in DetailBalances",
     "gl_only": "In ledger, no Labor Distribution",
     "posted_elsewhere": "Explained: posted to another account/period",
     "unchecked": "Not compared (no DetailBalances)",
