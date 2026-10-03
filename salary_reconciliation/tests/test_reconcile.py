@@ -271,6 +271,21 @@ class Reconcile(unittest.TestCase):
         self.assertEqual([l["txn"] for l in result["excluded"]], [lines[0]["txn"]])
 
 
+def two_periods():
+    """The demo with DetailBalances and Fund Line Items for 27-02 too, and
+    Rivera's 27-02 salary (transaction 29000001) posted in 27-03."""
+    found, _ = reconcile.load(demo_files())
+    gl = found[reconcile.GL][1] + [{"combo": tuple(A.split("-")), "period": "27-02",
+                                    "beginning": 0, "activity": 0, "ending": 0}]
+    fli = found[reconcile.FLI][1]
+    a6 = tuple(A.split("-"))[:6]
+    template = next(f for f in fli if f["ref"] == "30000001")
+    fli = fli + [dict(template, ref="29000001"),  # posted in 27-03
+                 dict(next(f for f in fli if f["key"][3] == "200010"), period="27-02")]
+    assert template["key"] == a6
+    return reconcile.reconcile(found[reconcile.LD][1], gl, fli)
+
+
 def person(result, name):
     return next(p for p in result["people"] if p["name"] == name)
 
@@ -299,6 +314,23 @@ class ByPerson(unittest.TestCase):
                          ("30000006", "Faculty Longevity Pay"))
         # the 27-02 line is outside the periods DetailBalances covers
         self.assertEqual({c["period"] for c in rivera["cells"]}, {"27-03"})
+
+    def test_period_by_period(self):
+        """Rivera's 27-02 salary is posted in 27-03: explained in both
+        periods, and each period has its own totals."""
+        result = two_periods()
+        rivera = person(result, "Rivera, Ana")
+        self.assertEqual([c["period"] for c in rivera["cells"]],
+                         sorted(c["period"] for c in rivera["cells"]))  # period first
+        feb, mar = rivera["periods"]["27-02"], rivera["periods"]["27-03"]
+        self.assertEqual((feb["status"], feb["ld_total"], feb["gl_total"]), ("explained", 497582, 0))
+        self.assertEqual(mar["status"], "explained")
+        self.assertEqual(rivera["status"], "explained")
+        self.assertEqual(rivera["ld_total"], feb["ld_total"] + mar["ld_total"])
+        [moved] = [x for c in rivera["cells"] if c["period"] == "27-02" for x in c["lines"]
+                   if x["kind"] == "moved_out"]
+        self.assertEqual(moved["other_period"], "27-03")
+        self.assertEqual(set(person(result, "Chen, Wei")["periods"]), {"27-03"})
 
     def test_journals_are_not_put_under_a_person(self):
         groups = run_demo()[0]["unattributed"]

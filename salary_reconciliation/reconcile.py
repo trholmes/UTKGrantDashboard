@@ -547,30 +547,13 @@ def by_person(ld_lines, fli_lines, compared_set, salary_account):
     out = []
     for p in sorted(people.values(), key=lambda p: _name_key(p["name"])):
         cells = _person_cells(p, coverage, names, checked)
-        compared_cells = [c for c in cells if c["status"] != "not_covered"]
-        ld_total = sum(c["ld_total"] for c in compared_cells)
-        gl_total = sum(c["gl_total"] for c in compared_cells)
-        if not checked:
-            status = "unchecked"
-        elif not compared_cells:
-            status = "not_covered"
-        elif not p["ld"]:
-            status = "not_in_ld"
-        elif gl_total == 0 and not any(c["gl_lines"] for c in compared_cells):
-            status = "not_in_ledger"
-        elif all(c["status"] == "match" for c in compared_cells):
-            status = "match"
-        elif ld_total == gl_total and all(c["status"] in ("match", "explained")
-                                          for c in compared_cells):
-            status = "explained"
-        else:
-            status = "mismatch"
-        out.append({
-            "name": p["name"], "number": p["number"], "status": status,
-            "ld_total": ld_total, "gl_total": gl_total if checked else None,
-            "diff": gl_total - ld_total if checked else None,
-            "cells": cells,
-        })
+        periods = sorted({c["period"] for c in cells}, key=period_sort_key)
+        out.append(dict(
+            _person_summary(cells, checked),
+            name=p["name"], number=p["number"], cells=cells,
+            # the same, period by period (for the page's period filter)
+            periods={per: _person_summary([c for c in cells if c["period"] == per], checked)
+                     for per in periods}))
     unattributed_out = [{
         "combo": combo_text(key), "account": key[3], "account_name": names.get(key[3], ""),
         "period": per, "total": sum(f["amount"] for f in lines),
@@ -578,6 +561,34 @@ def by_person(ld_lines, fli_lines, compared_set, salary_account):
     } for (key, per), lines in sorted(unattributed.items(),
                                       key=lambda kv: (kv[0][0], period_sort_key(kv[0][1])))]
     return out, unattributed_out
+
+
+def _person_summary(cells, checked):
+    """Totals and status over some of a person's account cells (all of
+    them, or one period's)."""
+    compared = [c for c in cells if c["status"] != "not_covered"]
+    ld_total = sum(c["ld_total"] for c in compared)
+    gl_total = sum(c["gl_total"] for c in compared)
+    if not checked:
+        status = "unchecked"
+    elif not compared:
+        status = "not_covered"
+    elif not any(c["ld_lines"] for c in cells):
+        status = "not_in_ld"
+    elif all(c["status"] == "match" for c in compared):
+        status = "match"
+    elif all(c["status"] in ("match", "explained") for c in compared):
+        # every difference is a line posted to another account or period;
+        # over all of a person's accounts those net to zero, but one
+        # period's may not (a line posted in the next period)
+        status = "explained"
+    elif gl_total == 0 and not any(c["gl_lines"] for c in compared):
+        status = "not_in_ledger"
+    else:
+        status = "mismatch"
+    return {"status": status, "ld_total": ld_total,
+            "gl_total": gl_total if checked else None,
+            "diff": gl_total - ld_total if checked else None}
 
 
 def _person_cells(p, coverage, names, checked):
@@ -627,7 +638,7 @@ def _person_cells(p, coverage, names, checked):
             cell(f["key"], f["period"])["lines"].append({"kind": "gl_only", "ld": None, "gl": f})
 
     out = []
-    for (key, per), c in sorted(cells.items(), key=lambda kv: (kv[0][0], period_sort_key(kv[0][1]))):
+    for (key, per), c in sorted(cells.items(), key=lambda kv: (period_sort_key(kv[0][1]), kv[0][0])):
         ld_total = sum(l["amount"] for l in c["ld_lines"])
         gl_total = sum(f["amount"] for f in c["gl_lines"])
         moved = (sum(x["gl"]["amount"] for x in c["lines"] if x["kind"] == "moved_in")

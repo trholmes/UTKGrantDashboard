@@ -71,9 +71,10 @@ Labor Distribution* (the ledger paid them; the Labor Distribution file
 doesn't mention them), *Not in the ledger*, or *Fund not in Fund Line
 Items* (not compared).
 
-Open a person to see each account combination and period they were
-charged to, with Labor Distribution against the ledger and whether they
-line up, and every line underneath: paired by transaction number, or
+Open a person to see their pay period by period — each period's totals
+and whether it lines up — and within each period every account
+combination they were charged to, with Labor Distribution against the
+ledger, and every line underneath: paired by transaction number, or
 marked *not in the ledger*, *no Labor Distribution line*, *same
 transaction, different amount*, or *posted to 512400 Faculty Longevity
 Pay* / *charged in Labor Distribution to 512100* when accounting posted a
@@ -86,6 +87,11 @@ Distribution transaction its *Ref Doc* names, or else to the person its
 salary accounts that are neither — journals, salary transfers — are
 listed below the people, per account: they're what explains an account
 total that differs when every person lines up.
+
+The **Period** menu above the list narrows everything — people, their
+totals and statuses, the tiles, and the account tab — to one period. A
+line charged in one period but posted in the next shows on both, as
+explained.
 
 ### By account
 

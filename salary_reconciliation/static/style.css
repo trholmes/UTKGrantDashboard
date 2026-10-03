@@ -123,6 +123,11 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 20px 48px; }
   padding: 5px 12px; cursor: pointer;
 }
 .seg button.on { background: var(--raised); color: var(--ink); font-weight: 600; }
+.period-pick { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+.period-pick select {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
+}
 #search {
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; min-width: 260px; flex: 1; max-width: 420px;
@@ -176,9 +181,11 @@ tr.detail > td { background: var(--page); padding: 12px 16px 16px 40px; }
 tr.detail > td:has(table.person-cells) { padding: 10px 12px 14px 24px; }
 table.person-cells .line-note { min-width: 140px; }
 .views button { padding: 7px 16px; font-size: 14px; }
+table.person-cells tr.period-head td { background: var(--page); font-weight: 700; font-size: 14px; border-top: 2px solid var(--muted); padding-top: 10px; }
 table.person-cells tr.cell-head td { background: var(--raised); font-weight: 600; border-top: 1px solid var(--border); }
+table.person-cells tr.cell-head td:first-child { padding-left: 14px; }
+table.person-cells tr.line td:first-child { padding-left: 28px; }
 table.person-cells tr.cell-head td .small-muted { font-weight: normal; }
-table.person-cells tr.line td:first-child { padding-left: 22px; }
 .line-note { color: var(--ink-2); font-size: 12px; }
 tr.line.ld_only .line-note, tr.line.gl_only .line-note, tr.line.amount_differs .line-note { color: var(--bad); font-weight: 600; }
 tr.line.moved_out .line-note, tr.line.moved_in .line-note { color: var(--warn-text); }
