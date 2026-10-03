@@ -8,3 +8,6 @@ demo/data/
 .DS_Store
 __pycache__/
 *.pyc
+
+# Salary reconciliation: fictional demo reports (recreate with make_demo.py)
+salary_reconciliation/demo/

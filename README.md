@@ -307,6 +307,15 @@ reload cache (each detail file parsed once, one build at a time, progress
 reported meanwhile) and the PI folders (a `?pi=` name can never reach
 outside `data/`; imports and saved scenarios stay in their PI's folder).
 
+## Salary reconciliation (business office)
+
+The [`salary_reconciliation/`](salary_reconciliation/) folder holds a
+separate tool for business offices: it reconciles the Labor Distribution
+report against the General Ledger (DetailBalances), and uses the Fund Line
+Items report to find the lines behind any difference. It shares no code
+with the dashboard and has its own launcher, `Start Salary
+Reconciliation.bat` — see [its README](salary_reconciliation/README.md).
+
 ## Sharing with a colleague
 
 Point them at this repo. They clone it, export their own two reports into
