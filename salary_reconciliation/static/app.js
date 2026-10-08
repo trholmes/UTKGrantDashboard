@@ -18,6 +18,7 @@ const PERSON_STATUS = {
   mismatch: "Does not match",
   not_in_ld: "Not in Labor Distribution",
   not_in_ledger: "Not in the ledger",
+  accounts_differ: "Total matches, accounts differ",
   not_covered: "Fund not in Fund Line Items",
   unchecked: "Not compared yet",
 };
@@ -66,12 +67,25 @@ function money(cents) {
 }
 const moneyCell = (c) => `<td class="num${c < 0 ? " neg" : ""}">${money(c)}</td>`;
 
-// 10-1100001-106015-512100-210-0000-00-0000 with fund and GL account picked out
+// The segments of 10-1100001-106015-512100-210-0000-00-0000, in order
+// (Fund Line Items has the first six).
+const SEGMENT_NAMES = ["Entity", "Fund", "Department", "GL account", "Program", "Activity", "InterCo", "Future"];
+const SEGMENT_CLASS = { 1: "seg-fund", 3: "seg-acct", 5: "seg-activity" };
+
+// An account combination with fund, GL account and activity code picked
+// out, and each segment named on hover.
 function comboHtml(combo) {
   const p = combo.split("-");
   if (p.length < 6) return `<span class="mono">${esc(combo)}</span>`;
-  return `<span class="mono">${esc(p[0])}-<span class="seg-fund" title="Fund">${esc(p[1])}</span>-${esc(p[2])}-` +
-    `<span class="seg-acct" title="GL account">${esc(p[3])}</span>-${esc(p.slice(4).join("-"))}</span>`;
+  return `<span class="mono">` + p.map((v, i) =>
+    `<span class="${SEGMENT_CLASS[i] || ""}" title="${SEGMENT_NAMES[i]}">${esc(v)}</span>`).join("-") + `</span>`;
+}
+
+// "Fund 1100001 · Account 512100 · Activity 0053" — the parts that tell
+// salary lines apart.
+function segmentsText(combo) {
+  const p = combo.split("-");
+  return p.length < 6 ? "" : `Fund ${p[1]} · Account ${p[3]} · Activity ${p[5]}`;
 }
 
 async function api(path, opts) {
@@ -314,7 +328,7 @@ function personDetailHtml(p) {
           `${esc(CELL_STATUS[sum.status] || PERSON_STATUS[sum.status])}</span>`}</td></tr>`);
     }
     rows.push(`<tr class="cell-head"><td>${comboHtml(c.combo)}` +
-      (c.account_name ? `<div class="small-muted">${esc(c.account_name)}</div>` : "") + `</td><td></td>` +
+      `<div class="small-muted">${esc([c.account_name, segmentsText(c.combo)].filter(Boolean).join(" — "))}</div></td><td></td>` +
       moneyCell(c.ld_total) +
       (hasFLI && c.status !== "not_covered" ? moneyCell(c.gl_total) + moneyCell(c.diff) : `<td class="num">—</td><td class="num">—</td>`) +
       `<td>${CELL_STATUS[c.status] ? `<span class="status ${c.status}">${esc(CELL_STATUS[c.status])}</span>` : ""}</td></tr>`);
@@ -400,7 +414,8 @@ function renderTable() {
     const isOpen = open.has(key(r));
     return `<tr class="row${isOpen ? " open" : ""}" data-key="${esc(key(r))}">` +
       `<td class="chev">${isOpen ? "▾" : "▸"}</td>` +
-      `<td>${comboHtml(r.combo)}<div class="small-muted">${plural(r.ld_people, "person", "people")}, ${plural(r.ld_lines.length, "line", "lines")}</div></td>` +
+      `<td>${comboHtml(r.combo)}<div class="small-muted">${esc(segmentsText(r.combo))}</div>` +
+      `<div class="small-muted">${plural(r.ld_people, "person", "people")}, ${plural(r.ld_lines.length, "line", "lines")}</div></td>` +
       `<td class="mono">${esc(r.period)}</td>` +
       moneyCell(r.ld_total) +
       `<td class="num">${res.loaded.detail_balances && r.status !== "gl_not_run" ? money(r.gl_total ?? 0) : "—"}</td>` +

@@ -6,6 +6,7 @@ Uses the fictional reports from make_demo.py (see its docstring for the
 story they tell).
 """
 
+import csv
 import http.client
 import io
 import json
@@ -373,6 +374,55 @@ class ByPerson(unittest.TestCase):
         self.assertEqual(person(result, "Rivera, Ana")["gl_total"], None)
         self.assertEqual({x["kind"] for p in result["people"] for c in p["cells"] for x in c["lines"]},
                          {"not_compared"})
+
+
+class BusinessOfficeRules(unittest.TestCase):
+    def test_payroll_period_is_used(self):
+        text = make_demo.ld_csv().decode()
+        header, first = text.splitlines()[:2]
+        cols = header.split(",")
+        row = next(csv.reader([first]))
+        row[cols.index("Fiscal Period - Payroll")] = "27-02"
+        row[cols.index("Fiscal Period - LD")] = "27-03"
+        rows = [cols, row]
+        [line] = reconcile.parse_ld(rows, 0)
+        self.assertEqual((line["period"], line["ld_period"]), ("27-02", "27-03"))
+
+    def test_salary_accounts_are_511100_to_518900(self):
+        for acct, ok in (("511100", True), ("512400", True), ("518900", True),
+                         ("518901", False), ("528100", False), ("511099", False),
+                         ("537600", True)):  # Joint Faculty Salaries, added by hand
+            self.assertEqual(reconcile.salary_account(acct), ok, acct)
+
+    def test_fringe_lines_are_not_put_under_a_person(self):
+        """Fund Line Items carries fringe (528100) for a person, with its
+        offsetting credit; Labor Distribution doesn't. Neither may count."""
+        found, _ = reconcile.load(demo_files())
+        fli = found[reconcile.FLI][1]
+        chen = next(f for f in fli if f["ref"] == "30000003")
+        fringe = dict(chen, key=chen["key"][:3] + ("528100",) + chen["key"][4:],
+                      amount=63000, account_name="Negotiated Fringe Benefit Rate")
+        offset = dict(fringe, key=chen["key"][:3] + ("528900",) + chen["key"][4:], amount=-63000)
+        result = reconcile.reconcile(found[reconcile.LD][1], found[reconcile.GL][1],
+                                     fli + [fringe, offset])
+        p = person(result, "Chen, Wei")
+        self.assertEqual(p["status"], "match")
+        self.assertEqual({c["account"] for c in p["cells"]}, {"512100"})
+        self.assertNotIn("528100", {g["account"] for g in result["unattributed"]})
+
+    def test_right_total_in_the_wrong_accounts(self):
+        """Money that reached the right total through accounts payroll didn't
+        charge, without a reference tying it back, is its own status."""
+        found, _ = reconcile.load(demo_files())
+        fli = found[reconcile.FLI][1]
+        chen = next(f for f in fli if f["ref"] == "30000003")
+        moved = [dict(chen, amount=chen["amount"] - 10000),
+                 dict(chen, ref="JE-1", key=chen["key"][:3] + ("513100",) + chen["key"][4:],
+                      amount=10000)]
+        fli = [f for f in fli if f is not chen] + moved
+        result = reconcile.reconcile(found[reconcile.LD][1], found[reconcile.GL][1], fli)
+        p = person(result, "Chen, Wei")
+        self.assertEqual((p["status"], p["diff"]), ("accounts_differ", 0))
 
 
 class Xlsx(unittest.TestCase):

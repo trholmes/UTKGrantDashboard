@@ -55,11 +55,19 @@ SIGNATURES = {
     FLI: ("FI_DocNo", "GL Account", "Amount", "Ref Doc"),
 }
 HEADER_SEARCH_ROWS = 30
-# Salary accounts outside the family of the ones payroll charges (see
-# reconcile()): compared too whenever the ledger shows activity on them.
+# The salary GL accounts (per the business office: 511100-518900), plus
+# any outside that range. Only these are compared on the ledger side;
+# fringe (528100 Negotiated Fringe Benefit Rate) and everything else is
+# left out — Labor Distribution no longer carries fringe.
+SALARY_ACCOUNT_RANGE = ("511100", "518900")
 EXTRA_SALARY_ACCOUNTS = {
     "537600",  # Joint Faculty Salaries
 }
+
+
+def salary_account(account):
+    lo, hi = SALARY_ACCOUNT_RANGE
+    return lo <= account <= hi or account in EXTRA_SALARY_ACCOUNTS
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
@@ -201,7 +209,10 @@ def parse_ld(rows, at):
             continue  # a total or footer row
         lines.append({
             "combo": combo,
-            "period": period(r.get("Fiscal Period - LD") or r.get("Fiscal Period - Payroll")),
+            # The payroll period is the one DetailBalances lines up with
+            # (the business office checked); the LD period is the fallback.
+            "period": period(r.get("Fiscal Period - Payroll") or r.get("Fiscal Period - LD")),
+            "ld_period": period(r.get("Fiscal Period - LD")),
             "person": _clean(r.get("Person Name")),
             "person_number": _clean(r.get("Person Number")),
             "assignment": _clean(r.get("Assignment Name")),
@@ -337,14 +348,6 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
     compared_set = set(compared)
     outside = [l for l in ld_ok if l["period"] not in compared_set]
 
-    # Salary-type accounts: the ones payroll charged, their family (same
-    # first two digits — 512100 Faculty Salaries brings in 51xxxx), and
-    # EXTRA_SALARY_ACCOUNTS.
-    salary_families = {l["combo"][3][:2] for l in ld_ok}
-
-    def salary_account(account):
-        return account[:2] in salary_families or account in EXTRA_SALARY_ACCOUNTS
-
     buckets = {}
 
     def bucket(combo, per):
@@ -435,7 +438,7 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
                                             if f["person"] and f["person"].lower() not in ld_names})
             missing_people.update(d["people_not_in_ld"])
 
-    people, unattributed = by_person(ld_ok, fli_lines, compared_set, salary_account)
+    people, unattributed = by_person(ld_ok, fli_lines, compared_set)
 
     compared_rows = [r for r in rows if r["status"] != "gl_not_run"]
     totals = {
@@ -501,7 +504,7 @@ def _name_key(name):
     return re.sub(r"\s+", " ", name).strip().lower()
 
 
-def by_person(ld_lines, fli_lines, compared_set, salary_account):
+def by_person(ld_lines, fli_lines, compared_set):
     """Each person's Labor Distribution against what the ledger posted for
     them, per account combination and period.
 
@@ -532,12 +535,14 @@ def by_person(ld_lines, fli_lines, compared_set, salary_account):
             continue
         coverage.add((f["key"][1], f["period"]))
         names.setdefault(f["key"][3], f["account_name"])
+        if not salary_account(f["key"][3]):
+            continue  # fringe and the rest: not what Labor Distribution carries
         ld = by_txn.get(f["ref"])
         if ld is not None:
             person(ld["person"])["gl"].append(f)
         elif f["person"]:
             person(f["person"])["gl"].append(f)
-        elif salary_account(f["key"][3]):
+        else:
             unattributed.setdefault((f["key"], f["period"]), []).append(f)
 
     checked = fli_lines is not None
@@ -581,6 +586,10 @@ def _person_summary(cells, checked):
         status = "explained"
     elif gl_total == 0 and not any(c["gl_lines"] for c in compared):
         status = "not_in_ledger"
+    elif gl_total == ld_total:
+        # the right total, but not in the accounts (or periods) payroll
+        # charged — e.g. a transfer between accounts with no reference
+        status = "accounts_differ"
     else:
         status = "mismatch"
     return {"status": status, "ld_total": ld_total,
@@ -822,6 +831,7 @@ PERSON_STATUS_TEXT = {
     "mismatch": "Does not match",
     "not_in_ld": "Not in Labor Distribution",
     "not_in_ledger": "Not in the ledger",
+    "accounts_differ": "Total matches, accounts differ",
     "not_covered": "Not compared: fund not in Fund Line Items",
     "unchecked": "Not compared (no Fund Line Items)",
 }
