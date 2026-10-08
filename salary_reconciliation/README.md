@@ -68,7 +68,9 @@ One row per person: what Labor Distribution charged for them, what the
 ledger posted for them, the difference, and a status — *Matches*,
 *Explained — posted to another account*, *Does not match*, *Not in
 Labor Distribution* (the ledger paid them; the Labor Distribution file
-doesn't mention them), *Not in the ledger*, or *Fund not in Fund Line
+doesn't mention them), *Not in the ledger*, *Total matches, accounts
+differ* (the right total, but not in the accounts or periods payroll
+charged, with nothing tying the lines back), or *Fund not in Fund Line
 Items* (not compared).
 
 Open a person to see their pay period by period — each period's totals
@@ -135,20 +137,25 @@ for lines set aside (below).
   (`10-1100001-106015-512100-210-0000-00-0000`) is
   Entity-Fund-Department-Account-Program-Activity-InterCo-Future — the same
   columns DetailBalances has. Fund Line Items has the first six of them.
-* **Period.** Labor Distribution's *Fiscal Period - LD* (`27-02`) is matched
+  The page shows each combination with its fund, GL account and activity
+  code picked out ("Fund 1100001 · Account 512100 · Activity 0053"), so
+  two activity codes on one fund are separate rows; typing an activity
+  code in the filter box shows just that activity.
+* **Period.** Labor Distribution's *Fiscal Period - Payroll* (`27-02`) —
+  the period DetailBalances lines up with; *Fiscal Period - LD* only if
+  that's blank — is matched
   to DetailBalances' *Accounting Period* and to Fund Line Items' *Year* and
   *Period* (`2027`, `2` → `27-02`). The periods compared are the ones in
   the DetailBalances report; Labor Distribution lines in other periods are
   listed separately as *not compared* — run both reports for the same
   period(s).
-* **Which ledger rows count.** DetailBalances covers every account.
-  Combinations Labor Distribution charged are always compared. Other rows
-  are only included if they have activity in the period and their account
-  is in the same family (first two digits — `512100` brings in `51xxxx`)
-  as an account payroll charged, or is one of the extra salary accounts
-  listed at the top of `reconcile.py` (`EXTRA_SALARY_ACCOUNTS`; for now
-  `537600` Joint Faculty Salaries). Fringe (`528100`), cash, payables and
-  operating expense accounts are left out.
+* **Which ledger rows count.** Only the salary GL accounts,
+  **511100–518900**, plus any listed in `EXTRA_SALARY_ACCOUNTS` (for now
+  `537600` Joint Faculty Salaries) — both at the top of `reconcile.py`.
+  Labor Distribution no longer carries fringe, so fringe (`528100`) and
+  every other account in DetailBalances or Fund Line Items is left out,
+  even on a line that names a person. Combinations Labor Distribution
+  charged are always compared.
 * **Matching Fund Line Items to Labor Distribution.** A ledger line's
   *Ref Doc* is the Labor Distribution *Transaction Number*, so lines are
   paired by reference only — never by amount alone, which would pair two

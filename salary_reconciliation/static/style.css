@@ -146,13 +146,14 @@ tr.row.open td.chev { color: var(--ink); }
 tfoot td { font-weight: 600; border-bottom: none; }
 .seg-fund { font-weight: 600; }
 .seg-acct { color: var(--accent); font-weight: 600; }
+.seg-activity { color: var(--warn-text); font-weight: 600; }
 .neg { color: var(--bad); }
 
 .status { display: inline-block; border-radius: 10px; padding: 1px 9px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .status.match { background: var(--good-bg); color: var(--good-text); }
 .status.mismatch, .status.not_in_gl, .status.gl_only { background: var(--bad-bg); color: var(--bad); }
 .status.not_in_ld, .status.not_in_ledger { background: var(--bad-bg); color: var(--bad); }
-.status.explained, .status.posted_elsewhere { background: var(--warn-bg); color: var(--warn-text); }
+.status.explained, .status.posted_elsewhere, .status.accounts_differ { background: var(--warn-bg); color: var(--warn-text); }
 .status.unchecked, .status.gl_not_run, .status.not_covered { background: var(--raised); color: var(--ink-2); }
 
 tr.detail > td { background: var(--page); padding: 12px 16px 16px 40px; }
