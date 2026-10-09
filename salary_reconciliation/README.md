@@ -95,6 +95,12 @@ totals and statuses, the tiles, and the account tab — to one period. A
 line charged in one period but posted in the next shows on both, as
 explained.
 
+**Hide lines that cancel out** leaves out pairs of lines for the same
+person, account combination and period whose amounts are exact opposites
+(306.98 and −306.98: a payment reversed and issued again). They net to
+zero, so no total or status changes; a note under each list says how many
+lines were hidden. The Excel download follows the toggle.
+
 ### By account
 
 The second tab is the account view: for each account combination and

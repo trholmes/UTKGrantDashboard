@@ -132,6 +132,10 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 20px 48px; }
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; min-width: 260px; flex: 1; max-width: 420px;
 }
+.check { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.check input { margin: 0; }
+.hidden-note { color: var(--muted); font-size: 12px; font-style: italic; }
+p.hidden-note { margin: 4px 0 8px; }
 
 .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 table { border-collapse: collapse; width: 100%; }

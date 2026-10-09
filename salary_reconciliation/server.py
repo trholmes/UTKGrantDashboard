@@ -100,13 +100,14 @@ class Session:
             "result": _jsonable(result),
         }
 
-    def workbook(self):
+    def workbook(self, hide_cancelled=False):
         with self.lock:
             found = dict(self.found)
         result = reconcile.reconcile_files(found)
         if result is None:
             raise ValueError("load a Labor Distribution report first")
-        return reconcile.export_workbook(result, {k: v[0] for k, v in found.items()})
+        return reconcile.export_workbook(result, {k: v[0] for k, v in found.items()},
+                                         hide_cancelled=hide_cancelled)
 
 
 def _jsonable(x):
@@ -161,7 +162,8 @@ def make_handler(session):
         def do_GET(self):
             if not self._local_caller():
                 return
-            path = urlparse(self.path).path
+            parts = urlparse(self.path)
+            path = parts.path
             if path == "/":
                 self._send_file(STATIC_DIR / "index.html")
             elif path.startswith("/static/"):
@@ -172,8 +174,10 @@ def make_handler(session):
                 except Exception as exc:
                     self._send(500, json.dumps({"error": str(exc)}))
             elif path == "/api/export":
+                query = parse_qs(parts.query)
                 try:
-                    data = session.workbook()
+                    data = session.workbook(
+                        hide_cancelled=(query.get("hide_cancelled") or ["0"])[0] in ("1", "true"))
                 except Exception as exc:
                     self._send(400, json.dumps({"error": str(exc)}))
                     return

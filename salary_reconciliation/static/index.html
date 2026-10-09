@@ -71,6 +71,9 @@
         <select id="period-select"><option value="">All</option></select>
       </label>
       <input type="search" id="search" placeholder="Filter by person, fund, account, activity…">
+      <label class="check" title="Leave out pairs of lines for the same person, account and period whose amounts are exact opposites (306.98 and −306.98): a payment reversed and issued again. Totals don't change.">
+        <input type="checkbox" id="hide-cancelled"> Hide lines that cancel out
+      </label>
       <button id="expand-all" class="btn small">Expand all</button>
     </div>
     <div id="people-view">
