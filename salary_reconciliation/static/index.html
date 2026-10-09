@@ -11,7 +11,7 @@
 <header class="topbar">
   <div>
     <h1>Salary Reconciliation</h1>
-    <div class="subtitle">Labor Distribution vs. the General Ledger, by person and by account</div>
+    <div class="subtitle">Labor Distribution vs. DetailBalances and Fund Line Items, by person and by account</div>
   </div>
   <div class="topbar-actions">
     <button id="export-btn" class="btn primary" disabled title="Summary, the sorted Labor Distribution with subtotals, and every difference">Download Excel</button>
@@ -37,7 +37,7 @@
         <div class="slot-step">2</div>
         <div class="slot-body">
           <div class="slot-title">DetailBalances</div>
-          <div class="slot-what">What the ledger shows for each GL code</div>
+          <div class="slot-what">What was posted to each account combination, as a total</div>
           <div class="slot-file"></div>
         </div>
       </div>
@@ -45,7 +45,7 @@
         <div class="slot-step">3</div>
         <div class="slot-body">
           <div class="slot-title">Fund Line Items</div>
-          <div class="slot-what">The ledger's lines — finds what's missing where totals differ</div>
+          <div class="slot-what">Every posted line — finds what's missing where totals differ</div>
           <div class="slot-file"></div>
         </div>
       </div>
@@ -57,7 +57,7 @@
 
   <section id="results" hidden>
     <div class="seg views" id="view-tabs" role="tablist" aria-label="View">
-      <button data-view="people" class="on" title="Each person's Labor Distribution against what the ledger posted for them">By person</button>
+      <button data-view="people" class="on" title="Each person's Labor Distribution against what Fund Line Items posted for them">By person</button>
       <button data-view="accounts" title="Each account combination's Labor Distribution total against DetailBalances">By account</button>
     </div>
     <div id="tiles" class="tiles"></div>
@@ -70,11 +70,25 @@
       <label class="period-pick">Period
         <select id="period-select"><option value="">All</option></select>
       </label>
-      <input type="search" id="search" placeholder="Filter by person, fund, account, activity…">
       <label class="check" title="Leave out pairs of lines for the same person, account and period whose amounts are exact opposites (306.98 and −306.98): a payment reversed and issued again. Totals don't change.">
         <input type="checkbox" id="hide-cancelled"> Hide lines that cancel out
       </label>
       <button id="expand-all" class="btn small">Expand all</button>
+    </div>
+    <div class="filters">
+      <div class="chart-string" id="segment-filters" role="group" aria-label="Account combination">
+        <label><span>Entity</span><input data-seg="0" class="w2" autocomplete="off"></label><span class="dash">-</span>
+        <label><span>Fund</span><input data-seg="1" class="w7" autocomplete="off"></label><span class="dash">-</span>
+        <label><span>Department</span><input data-seg="2" class="w6" autocomplete="off"></label><span class="dash">-</span>
+        <label><span>Account</span><input data-seg="3" class="w6" autocomplete="off"></label><span class="dash">-</span>
+        <label><span>Program</span><input data-seg="4" class="w3" autocomplete="off"></label><span class="dash">-</span>
+        <label><span>Activity</span><input data-seg="5" class="w4" autocomplete="off"></label><span class="dash">-</span>
+        <label><span>InterCo</span><input data-seg="6" class="w2" autocomplete="off"></label><span class="dash">-</span>
+        <label><span>Future</span><input data-seg="7" class="w4" autocomplete="off"></label>
+      </div>
+      <label class="person-filter"><span>Person</span><input id="person-filter" type="search" autocomplete="off"></label>
+      <button id="clear-filters" class="btn small" title="Empty every filter box">Clear</button>
+      <p class="filter-hint">Each box takes a value, the start of one (<code>512</code>), a range (<code>512100-512400</code>) or a list (<code>512100, 537600</code>). Person: part of a name or number; several separated by <code>;</code>.</p>
     </div>
     <div id="people-view">
       <div class="table-wrap">
@@ -84,7 +98,7 @@
               <th></th>
               <th>Person</th>
               <th class="num">Labor Distribution</th>
-              <th class="num">Ledger</th>
+              <th class="num">Fund Line Items</th>
               <th class="num">Difference</th>
               <th>Status</th>
             </tr>
