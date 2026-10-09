@@ -837,11 +837,52 @@ PERSON_STATUS_TEXT = {
 }
 
 
+def cancelled(items, group, amounts):
+    """Indices of the items that another item in the same group cancels
+    out exactly — 306.98 and -306.98 for the same person on the same
+    account and period, a payment reversed and issued again. `amounts`
+    gives each item's amounts (one per side shown; None for a side it
+    has nothing on); two items cancel when every side is the exact
+    opposite and at least one isn't zero. Each item pairs with one other
+    at most, so leaving a pair out changes no total."""
+    amts = [tuple(amounts(x)) for x in items]
+    keys = [group(x) for x in items]
+    hidden = set()
+    for i in range(len(items)):
+        if i in hidden or not any(amts[i]):
+            continue
+        for j in range(i + 1, len(items)):
+            if j in hidden or keys[j] != keys[i]:
+                continue
+            if all((a is None) == (b is None) and (a is None or b == -a)
+                   for a, b in zip(amts[i], amts[j])):
+                hidden.update((i, j))
+                break
+    return hidden
+
+
+def without_cancelled(items, group, amounts):
+    """The items less the pairs that cancel out, and how many were left out."""
+    hidden = cancelled(items, group, amounts)
+    return [x for i, x in enumerate(items) if i not in hidden], len(hidden)
+
+
+def _cancel_note(n):
+    return f"{n} lines that cancel each other out left out"
+
+
 def _amt(c, style=xlsx.MONEY):
     return (round(c / 100, 2), style) if c is not None else ""
 
 
-def export_workbook(result, sources=None):
+def export_workbook(result, sources=None, hide_cancelled=False):
+    """The result as a workbook. With hide_cancelled, pairs of lines that
+    cancel each other out exactly (same person, account and period) are
+    left out of the line listings, as the page's toggle hides them; a row
+    says how many."""
+    def keep(items, group, amounts):
+        return without_cancelled(items, group, amounts) if hide_cancelled else (items, 0)
+
     summary = [["Account combination", "Fund", "Department", "Account", "Program",
                 "Activity", "Period", "Labor Distribution", "DetailBalances",
                 "Difference", "Status", "People", "Fund Line Items: in ledger only",
@@ -870,11 +911,14 @@ def export_workbook(result, sources=None):
     for r in result["rows"]:
         if not r["ld_lines"]:
             continue
-        for l in r["ld_lines"]:
+        lines, left_out = keep(r["ld_lines"], lambda l: l["person"], lambda l: (l["amount"],))
+        for l in lines:
             ld_sheet.append([r["combo"], r["period"], l["person"], l["person_number"],
                              l["assignment"], l["pay_element"], l["pay_start"],
                              l["pay_end"], _amt(l["amount"]), l["percent"], l["txn"],
                              l["status"]])
+        if left_out:
+            ld_sheet.append([r["combo"], r["period"], _cancel_note(left_out)])
         ld_sheet.append([(f"Subtotal {r['combo']}", xlsx.BOLD), r["period"], "", "",
                          "", "", "", "", _amt(r["ld_total"], xlsx.MONEY_BOLD)])
 
@@ -885,17 +929,27 @@ def export_workbook(result, sources=None):
         fli = r["fli"]
         if not fli or not fli.get("covered"):
             continue
-        for f in fli["gl_only"]:
+        gl_only, n1 = keep(fli["gl_only"], lambda f: f["person"], lambda f: (f["amount"],))
+        ld_only, n2 = keep(fli["ld_only"], lambda l: l["person"], lambda l: (l["amount"],))
+        amount_differs, n3 = keep(fli["amount_differs"], lambda m: m["ld"]["person"],
+                                  lambda m: (m["ld"]["amount"], m["gl"]["amount"]))
+        moved_out, n4 = keep(fli["moved_out"],
+                             lambda m: (m["ld"]["person"], m["to"], m["to_period"]),
+                             lambda m: (m["ld"]["amount"],))
+        moved_in, n5 = keep(fli["moved_in"],
+                            lambda m: (m["ld"]["person"], m["from"], m["from_period"]),
+                            lambda m: (m["gl"]["amount"],))
+        for f in gl_only:
             diff_sheet.append([r["combo"], r["period"], "In ledger, not in Labor Distribution",
                                f["posted"],
                                f"{f['person']} — {f['assignment']}" if f["person"]
                                else f["text"] or f["header_text"], _amt(f["amount"]),
                                f["ref"], f["doc"], f["doc_type"], f["user"]])
-        for l in fli["ld_only"]:
+        for l in ld_only:
             diff_sheet.append([r["combo"], r["period"], "In Labor Distribution, not in ledger",
                                l["pay_start"], f"{l['person']} — {l['pay_element']}",
                                _amt(l["amount"]), l["txn"], "", "", ""])
-        for m in fli["amount_differs"]:
+        for m in amount_differs:
             diff_sheet.append([r["combo"], r["period"], "Amount differs (ledger side)",
                                m["gl"]["posted"], m["gl"]["text"], _amt(m["gl"]["amount"]),
                                m["gl"]["ref"], m["gl"]["doc"], m["gl"]["doc_type"],
@@ -904,7 +958,7 @@ def export_workbook(result, sources=None):
                                m["ld"]["pay_start"],
                                f"{m['ld']['person']} — {m['ld']['pay_element']}",
                                _amt(m["ld"]["amount"]), m["ld"]["txn"], "", "", ""])
-        for m in fli["moved_out"]:
+        for m in moved_out:
             g = m["gl"]
             diff_sheet.append([r["combo"], r["period"],
                                f"Posted to {g['key'][3]} {g['account_name']} in {m['to_period']}"
@@ -912,12 +966,14 @@ def export_workbook(result, sources=None):
                                g["posted"], f"{m['ld']['person']} — {m['ld']['pay_element']}",
                                _amt(m["ld"]["amount"]), m["ld"]["txn"], g["doc"],
                                g["doc_type"], g["user"]])
-        for m in fli["moved_in"]:
+        for m in moved_in:
             g = m["gl"]
             diff_sheet.append([r["combo"], r["period"],
                                f"Charged in Labor Distribution to {m['from']} ({m['from_period']})",
                                g["posted"], f"{m['ld']['person']} — {m['ld']['pay_element']}",
                                _amt(g["amount"]), g["ref"], g["doc"], g["doc_type"], g["user"]])
+        if n1 + n2 + n3 + n4 + n5:
+            diff_sheet.append([r["combo"], r["period"], _cancel_note(n1 + n2 + n3 + n4 + n5)])
 
     person_sheet = [["Person", "Person number", "Account combination", "Account", "Period",
                      "Line", "Transaction / reference", "Labor Distribution", "Ledger",
@@ -937,9 +993,12 @@ def export_workbook(result, sources=None):
                                  _amt(c["diff"]) if compared else "",
                                  PERSON_STATUS_TEXT[c["status"]]])
             # the lines that don't simply pair up
-            for x in c["lines"]:
-                if x["kind"] in ("pair", "not_compared"):
-                    continue
+            odd = [x for x in c["lines"] if x["kind"] not in ("pair", "not_compared")]
+            odd, left_out = keep(
+                odd, lambda x: (x["kind"], x.get("other"), x.get("other_period")),
+                lambda x: (x["ld"]["amount"] if x["ld"] and x["kind"] != "moved_in" else None,
+                           x["gl"]["amount"] if x["gl"] and x["kind"] != "moved_out" else None))
+            for x in odd:
                 ld, gl = x["ld"], x["gl"]
                 note = {"amount_differs": "Same transaction, different amount",
                         "ld_only": "Not in the ledger",
@@ -955,12 +1014,19 @@ def export_workbook(result, sources=None):
                                      _amt(ld["amount"]) if ld and x["kind"] != "moved_in" else "",
                                      _amt(gl["amount"]) if gl and x["kind"] != "moved_out" else "",
                                      "", note])
+            if left_out:
+                person_sheet.append([p["name"], p["number"], c["combo"], c["account_name"],
+                                     c["period"], _cancel_note(left_out)])
     for g in result["unattributed"]:
-        for f in g["lines"]:
+        lines, left_out = keep(g["lines"], lambda f: "", lambda f: (f["amount"],))
+        for f in lines:
             person_sheet.append(["(not anyone's payroll line)", "", g["combo"], g["account_name"],
                                  g["period"], f["text"] or f["header_text"], f["ref"], "",
                                  _amt(f["amount"]), "", f"{f['doc_type']}, entered by {f['user']}"
                                  if f["user"] else f["doc_type"]])
+        if left_out:
+            person_sheet.append(["(not anyone's payroll line)", "", g["combo"], g["account_name"],
+                                 g["period"], _cancel_note(left_out)])
 
     sheets = [
         {"name": "By person", "rows": person_sheet,
@@ -977,11 +1043,15 @@ def export_workbook(result, sources=None):
         other = [["Why not compared"] + ld_cols]
         for why, lines in (("Period not in DetailBalances", result["outside_periods"]),
                            ("Status is not Success", result["excluded"])):
+            lines, left_out = keep(lines, lambda l: (l["combo"], l["period"], l["person"]),
+                                   lambda l: (l["amount"],))
             for l in lines:
                 other.append([why, combo_text(l["combo"]), l["period"], l["person"],
                               l["person_number"], l["assignment"], l["pay_element"],
                               l["pay_start"], l["pay_end"], _amt(l["amount"]),
                               l["percent"], l["txn"], l["status"]])
+            if left_out:
+                other.append([why, _cancel_note(left_out)])
         sheets.append({"name": "Not compared", "rows": other,
                        "widths": [28, 40, 8, 26, 13, 28, 40, 13, 13, 14, 8, 18, 10]})
     if sources:
@@ -998,6 +1068,9 @@ def main():
                     help="the exports, in any order (CSV or .xlsx); "
                          "default: the newest of each in the data folder")
     ap.add_argument("-o", "--output", type=Path, default=Path("Salary reconciliation.xlsx"))
+    ap.add_argument("--hide-cancelled", action="store_true",
+                    help="leave out pairs of lines that cancel each other out exactly "
+                         "(306.98 and -306.98 for the same person, account and period)")
     args = ap.parse_args()
     if args.files:
         found, notes = load([(p.name, p.read_bytes()) for p in args.files])
@@ -1014,7 +1087,7 @@ def main():
         print(f"{r['combo']}  {r['period']}  LD {money(r['ld_total']):>14}  "
               f"GL {gl:>14}  {diff:>12}  {STATUS_TEXT[r['status']]}")
     args.output.write_bytes(export_workbook(
-        result, {k: v[0] for k, v in found.items()}))
+        result, {k: v[0] for k, v in found.items()}, hide_cancelled=args.hide_cancelled))
     print(f"Wrote {args.output}")
 
 

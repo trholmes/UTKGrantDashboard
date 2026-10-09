@@ -457,6 +457,66 @@ class Xlsx(unittest.TestCase):
             self.assertIn(sheet, names)
 
 
+def sheet_text(book, index):
+    """The raw XML of the workbook's index-th sheet (1-based); the writer
+    stores strings inline, so text can be searched for directly."""
+    return zipfile.ZipFile(io.BytesIO(book)).read(f"xl/worksheets/sheet{index}.xml").decode()
+
+
+class CancellingPairs(unittest.TestCase):
+    """Pairs of lines that cancel each other out exactly — 306.98 and
+    -306.98 for the same person, account and period — can be left out of
+    the line listings; the page's toggle hides them, the export takes
+    hide_cancelled."""
+
+    def test_opposite_amounts_in_the_same_group_pair_up_once(self):
+        items = [("a", 30698), ("a", -30698), ("a", 30698), ("b", -30698), ("a", 0), ("a", 0)]
+        group, amounts = (lambda x: x[0]), (lambda x: (x[1],))
+        # the third 306.98 has no partner left, "b" is another group, and
+        # zero lines never cancel anything
+        self.assertEqual(reconcile.cancelled(items, group, amounts), {0, 1})
+        kept, n = reconcile.without_cancelled(items, group, amounts)
+        self.assertEqual((kept, n), ([("a", 30698), ("b", -30698), ("a", 0), ("a", 0)], 2))
+
+    def test_every_side_shown_must_be_the_opposite(self):
+        items = [(30698, 30698), (-30698, -30698),   # a pair on both sides
+                 (100, None), (-100, 200),           # a side present on one only
+                 (None, 500), (None, -500), (None, -500)]
+        self.assertEqual(reconcile.cancelled(items, lambda x: "", lambda x: x), {0, 1, 4, 5})
+
+    def _with_reversed_payment(self):
+        found, _ = reconcile.load(demo_files())
+        ld = list(found[reconcile.LD][1])
+        chen = next(l for l in ld if l["person"] == "Chen, Wei")
+        ld += [dict(chen, amount=30698, txn="30000007", pay_element="Correction Earnings"),
+               dict(chen, amount=-30698, txn="30000008", pay_element="Correction Earnings")]
+        return reconcile.reconcile(ld, found[reconcile.GL][1], found[reconcile.FLI][1])
+
+    def test_a_reversed_payment_changes_no_total(self):
+        result = self._with_reversed_payment()
+        chen = person(result, "Chen, Wei")
+        self.assertEqual((chen["status"], chen["ld_total"], chen["gl_total"]), ("match", 210000, 210000))
+        cell = next(c for c in chen["cells"] if c["combo"] == A)
+        self.assertEqual([x["kind"] for x in cell["lines"]], ["ld_only", "ld_only", "pair"])
+        self.assertEqual(row(result, A)["status"], "posted_elsewhere")
+        self.assertEqual(len(row(result, A)["fli"]["ld_only"]), 2)
+
+    def test_export_leaves_cancelling_pairs_out_on_request(self):
+        result = self._with_reversed_payment()
+        note = "2 lines that cancel each other out left out"
+        book = reconcile.export_workbook(result)
+        for index in (1, 3, 4):  # By person, Labor Distribution sorted, Differences
+            self.assertEqual(sheet_text(book, index).count("Correction Earnings"), 2, index)
+            self.assertNotIn(note, sheet_text(book, index))
+        book = reconcile.export_workbook(result, hide_cancelled=True)
+        for index in (1, 3, 4):
+            self.assertNotIn("Correction Earnings", sheet_text(book, index), index)
+            self.assertIn(note, sheet_text(book, index), index)
+        # the lines that aren't a cancelling pair are still there
+        self.assertIn("30000003", sheet_text(book, 3))
+        self.assertIn("Longevity", sheet_text(book, 4))
+
+
 def _rec(rtype, data):
     return struct.pack("<HH", rtype, len(data)) + data
 
@@ -603,6 +663,8 @@ class Server(unittest.TestCase):
         self.assertEqual(set(state["files"]), {reconcile.LD, reconcile.GL, reconcile.FLI})
         self.assertEqual(state["result"]["counts"]["mismatch"], 2)
         status, body = self.request("GET", "/api/export")
+        self.assertEqual((status, body[:2]), (200, b"PK"))
+        status, body = self.request("GET", "/api/export?hide_cancelled=1")
         self.assertEqual((status, body[:2]), (200, b"PK"))
 
     def test_load_folder(self):

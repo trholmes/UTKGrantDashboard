@@ -41,6 +41,7 @@ let state = null;
 let filter = "all";
 let view = "people";
 let period = "";  // "" = all periods
+let hideCancelled = false;  // leave out pairs of lines that cancel each other out
 
 // A person as seen through the period filter: that period's totals,
 // status and accounts, or null if they have nothing in it.
@@ -87,6 +88,39 @@ function segmentsText(combo) {
   const p = combo.split("-");
   return p.length < 6 ? "" : `Fund ${p[1]} · Account ${p[3]} · Activity ${p[5]}`;
 }
+
+// Indices of the items that another item in the same group cancels out
+// exactly — 306.98 and −306.98 for the same person on the same account and
+// period, a payment reversed and issued again. `amounts` gives each item's
+// amounts, one per side shown (null for a side it has nothing on); two items
+// cancel when every side is the exact opposite and at least one isn't zero.
+// Each item pairs with one other at most, so hiding a pair changes no total.
+function cancelledIndices(items, group, amounts) {
+  const amts = items.map(amounts);
+  const keys = items.map(group);
+  const hidden = new Set();
+  for (let i = 0; i < items.length; i++) {
+    if (hidden.has(i) || !amts[i].some((a) => a)) continue;
+    for (let j = i + 1; j < items.length; j++) {
+      if (hidden.has(j) || keys[j] !== keys[i]) continue;
+      if (amts[i].every((a, k) => (a === null) === (amts[j][k] === null) && (a === null || amts[j][k] === -a))) {
+        hidden.add(i).add(j);
+        break;
+      }
+    }
+  }
+  return hidden;
+}
+
+// The items to show under the "hide lines that cancel out" toggle, and how
+// many were left out.
+function withoutCancelled(items, group, amounts) {
+  if (!hideCancelled) return { shown: items, hidden: 0 };
+  const hidden = cancelledIndices(items, group, amounts);
+  return { shown: items.filter((_, i) => !hidden.has(i)), hidden: hidden.size };
+}
+const hiddenText = (n) => `${plural(n, "line", "lines")} that cancel each other out hidden`;
+const hiddenNote = (n) => (n ? `<p class="hidden-note">${esc(hiddenText(n))}</p>` : "");
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -332,7 +366,12 @@ function personDetailHtml(p) {
       moneyCell(c.ld_total) +
       (hasFLI && c.status !== "not_covered" ? moneyCell(c.gl_total) + moneyCell(c.diff) : `<td class="num">—</td><td class="num">—</td>`) +
       `<td>${CELL_STATUS[c.status] ? `<span class="status ${c.status}">${esc(CELL_STATUS[c.status])}</span>` : ""}</td></tr>`);
-    for (const x of c.lines) rows.push(lineHtml(x, c));
+    const { shown, hidden } = withoutCancelled(c.lines,
+      (x) => `${x.kind}|${x.other || ""}|${x.other_period || ""}`,
+      (x) => [x.ld && x.kind !== "moved_in" ? x.ld.amount : null,
+              x.gl && x.kind !== "moved_out" ? x.gl.amount : null]);
+    for (const x of shown) rows.push(lineHtml(x, c));
+    if (hidden) rows.push(`<tr class="line"><td colspan="6" class="hidden-note">${esc(hiddenText(hidden))}</td></tr>`);
   }
   return `<table class="person-cells"><thead><tr><th>Period / account combination / line</th>` +
     `<th>Transaction</th><th class="num">Labor Distribution</th><th class="num">Ledger</th>` +
@@ -377,12 +416,14 @@ function renderUnattributed() {
     rows.push(`<tr class="cell-head"><td>${comboHtml(g.combo)}` +
       (g.account_name ? `<div class="small-muted">${esc(g.account_name)}</div>` : "") + `</td>` +
       `<td class="mono">${esc(g.period)}</td><td></td><td></td><td></td>${moneyCell(g.total)}</tr>`);
-    for (const f of g.lines) {
+    const { shown, hidden } = withoutCancelled(g.lines, () => "", (f) => [f.amount]);
+    for (const f of shown) {
       rows.push(`<tr class="line"><td>${esc(f.text || f.header_text)}` +
         (f.text && f.header_text ? `<div class="small-muted">${esc(f.header_text)}</div>` : "") + `</td>` +
         `<td class="mono">${esc(f.posted)}</td><td>${esc(f.doc_type)}</td><td class="mono">${esc(f.ref)}</td>` +
         `<td>${esc(f.user)}</td>${moneyCell(f.amount)}</tr>`);
     }
+    if (hidden) rows.push(`<tr class="line"><td colspan="6" class="hidden-note">${esc(hiddenText(hidden))}</td></tr>`);
   }
   $("#unattributed").innerHTML = `<details open><summary>Ledger entries on salary accounts that aren't anyone's ` +
     `payroll line (${plural(groups.reduce((a, g) => a + g.lines.length, 0), "line", "lines")})</summary>` +
@@ -478,21 +519,24 @@ function explainHtml(r) {
     out.push(`<h3>In Labor Distribution, not in the ledger (${fli.ld_only.length})</h3>` + ldTable(fli.ld_only, false));
   }
   if (fli.amount_differs.length) {
+    const { shown, hidden } = withoutCancelled(fli.amount_differs, (m) => m.ld.person, (m) => [m.ld.amount, m.gl.amount]);
     out.push(`<h3>Same transaction, different amount (${fli.amount_differs.length})</h3>` +
       `<table><thead><tr><th>Person</th><th>Pay element</th><th>Transaction</th><th class="num">Labor Distribution</th><th class="num">Ledger</th><th class="num">Difference</th></tr></thead><tbody>` +
-      fli.amount_differs.map((m) => `<tr><td>${esc(m.ld.person)}</td><td>${esc(m.ld.pay_element)}</td><td class="mono">${esc(m.ld.txn)}</td>` +
+      shown.map((m) => `<tr><td>${esc(m.ld.person)}</td><td>${esc(m.ld.pay_element)}</td><td class="mono">${esc(m.ld.txn)}</td>` +
         moneyCell(m.ld.amount) + moneyCell(m.gl.amount) + moneyCell(m.gl.amount - m.ld.amount) + `</tr>`).join("") +
-      `</tbody></table>`);
+      `</tbody></table>` + hiddenNote(hidden));
   }
   if (fli.moved_out.length) {
     out.push(`<h3>Charged here in Labor Distribution, posted to another account or period in the ledger (${fli.moved_out.length})</h3>` +
       movedTable(fli.moved_out, (m) => esc(`${m.gl.key.split("-")[3]} ${m.gl.account_name}`) +
-        (m.to_period !== r.period ? `, ${esc(m.to_period)}` : "") + `<div class="small-muted mono">${esc(m.to)}</div>`, "Posted to"));
+        (m.to_period !== r.period ? `, ${esc(m.to_period)}` : "") + `<div class="small-muted mono">${esc(m.to)}</div>`, "Posted to",
+        (m) => `${m.ld.person}|${m.to}|${m.to_period}`));
   }
   if (fli.moved_in.length) {
     out.push(`<h3>In the ledger here, charged to another account or period in Labor Distribution (${fli.moved_in.length})</h3>` +
       movedTable(fli.moved_in, (m) => `<span class="mono">${esc(m.from)}</span>` +
-        (m.from_period !== r.period ? `, ${esc(m.from_period)}` : ""), "Charged in LD to"));
+        (m.from_period !== r.period ? `, ${esc(m.from_period)}` : ""), "Charged in LD to",
+        (m) => `${m.ld.person}|${m.from}|${m.from_period}`));
   }
   if (fli.moved_out.length || fli.moved_in.length) {
     out.push(fli.unexplained === 0
@@ -506,17 +550,21 @@ function explainHtml(r) {
   return out.join("");
 }
 
-// Lines whose two sides sit on different accounts; `where` describes the other side.
-function movedTable(moves, where, whereLabel) {
+// Lines whose two sides sit on different accounts; `where` describes the
+// other side, `group` the key within which opposite amounts cancel out.
+function movedTable(moves, where, whereLabel, group) {
+  const { shown, hidden } = withoutCancelled(moves, group, (m) => [m.ld.amount]);
   return `<table><thead><tr><th>Person</th><th>Pay element</th><th>Transaction</th><th>${esc(whereLabel)}</th>` +
     `<th class="num">Amount</th></tr></thead><tbody>` +
-    moves.map((m) => `<tr><td>${esc(m.ld.person)}</td><td>${esc(m.ld.pay_element)}</td>` +
+    shown.map((m) => `<tr><td>${esc(m.ld.person)}</td><td>${esc(m.ld.pay_element)}</td>` +
       `<td class="mono">${esc(m.ld.txn)}</td><td>${where(m)}</td>${moneyCell(m.ld.amount)}</tr>`).join("") +
-    `</tbody></table>`;
+    `</tbody></table>` + hiddenNote(hidden);
 }
 
-function ldTable(lines, subtotals) {
-  if (!lines.length) return `<p class="small-muted">None.</p>`;
+function ldTable(all, subtotals) {
+  if (!all.length) return `<p class="small-muted">None.</p>`;
+  const { shown: lines, hidden } = withoutCancelled(all, (l) => l.person, (l) => [l.amount]);
+  if (!lines.length) return `<p class="small-muted">None shown.</p>` + hiddenNote(hidden);
   const rows = [];
   let i = 0;
   while (i < lines.length) {
@@ -534,12 +582,15 @@ function ldTable(lines, subtotals) {
     i = j;
   }
   return `<table><thead><tr><th>Person</th><th>Assignment</th><th>Pay element</th><th>Payroll period</th>` +
-    `<th>Transaction</th><th class="num">Line %</th><th class="num">Amount</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    `<th>Transaction</th><th class="num">Line %</th><th class="num">Amount</th></tr></thead><tbody>${rows.join("")}</tbody></table>` +
+    hiddenNote(hidden);
 }
 
 // Ledger lines, grouped by whose pay they are (lines that aren't anyone's
 // pay — journals, transfers — come first), with a subtotal per person.
-function glTable(lines) {
+function glTable(all) {
+  const { shown: lines, hidden } = withoutCancelled(all, (f) => f.person, (f) => [f.amount]);
+  if (!lines.length) return `<p class="small-muted">None shown.</p>` + hiddenNote(hidden);
   const rows = [];
   let i = 0;
   while (i < lines.length) {
@@ -560,7 +611,8 @@ function glTable(lines) {
     i = j;
   }
   return `<table><thead><tr><th>Person</th><th>Assignment / description</th><th>Entered</th><th>Document type</th>` +
-    `<th>Reference</th><th>Entered by</th><th class="num">Amount</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    `<th>Reference</th><th>Entered by</th><th class="num">Amount</th></tr></thead><tbody>${rows.join("")}</tbody></table>` +
+    hiddenNote(hidden);
 }
 
 function renderLeftovers() {
@@ -577,12 +629,13 @@ function renderLeftovers() {
   $("#leftovers").innerHTML = blocks.join("");
 }
 
-function leftoverTable(lines) {
+function leftoverTable(all) {
+  const { shown, hidden } = withoutCancelled(all, (l) => `${l.combo}|${l.period}|${l.person}`, (l) => [l.amount]);
   return `<table><thead><tr><th>Account combination</th><th>Period</th><th>Person</th><th>Pay element</th>` +
     `<th>Status</th><th class="num">Amount</th></tr></thead><tbody>` +
-    lines.map((l) => `<tr><td>${comboHtml(l.combo)}</td><td class="mono">${esc(l.period)}</td><td>${esc(l.person)}</td>` +
+    shown.map((l) => `<tr><td>${comboHtml(l.combo)}</td><td class="mono">${esc(l.period)}</td><td>${esc(l.person)}</td>` +
       `<td>${esc(l.pay_element)}</td><td>${esc(l.status)}</td>${moneyCell(l.amount)}</tr>`).join("") +
-    `</tbody></table>`;
+    `</tbody></table>` + hiddenNote(hidden);
 }
 
 // --- events ---------------------------------------------------------------
@@ -620,7 +673,14 @@ $("#clear-btn").addEventListener("click", async () => {
   refresh();
 });
 
-$("#export-btn").addEventListener("click", () => { window.location = "/api/export"; });
+$("#export-btn").addEventListener("click", () => {
+  window.location = "/api/export" + (hideCancelled ? "?hide_cancelled=1" : "");
+});
+
+$("#hide-cancelled").addEventListener("change", (e) => {
+  hideCancelled = e.target.checked;
+  render();
+});
 
 $("#people tbody").addEventListener("click", (e) => {
   const tr = e.target.closest("tr.row");
