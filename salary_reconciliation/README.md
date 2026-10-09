@@ -2,9 +2,10 @@
 
 A business-office tool, separate from the grant dashboard in the folder
 above (it shares no code with it). It checks that what payroll charged —
-the **Labor Distribution** report — is what the General Ledger posted, per
-account combination and fiscal period, and when they differ, finds the
-lines that are missing on one side.
+the **Labor Distribution** report — is what was posted to the General
+Ledger, as the **DetailBalances** and **Fund Line Items** reports show it,
+per account combination and fiscal period, and when they differ, finds
+the lines that are missing on one side.
 
 It automates this routine:
 
@@ -13,7 +14,7 @@ It automates this routine:
    GL code, so this groups each fund's salary by GL code.
 2. Run **DetailBalances** (General Accounting), which shows the posted
    amount for each GL code.
-3. Where the Labor Distribution total doesn't match the ledger, run
+3. Where the Labor Distribution total doesn't match DetailBalances, run
    **Fund Line Items** to find what is missing.
 
 The page does all three steps as soon as the reports are loaded, and works
@@ -64,36 +65,57 @@ are recognized by their column headings and held in memory only.
 
 ### By person (the main list)
 
-One row per person: what Labor Distribution charged for them, what the
-ledger posted for them, the difference, and a status — *Matches*,
+One row per person: what Labor Distribution charged for them, what Fund
+Line Items posted for them, the difference, and a status — *Matches*,
 *Explained — posted to another account*, *Does not match*, *Not in
-Labor Distribution* (the ledger paid them; the Labor Distribution file
-doesn't mention them), *Not in the ledger*, *Total matches, accounts
-differ* (the right total, but not in the accounts or periods payroll
-charged, with nothing tying the lines back), or *Fund not in Fund Line
-Items* (not compared).
+Labor Distribution* (Fund Line Items paid them; the Labor Distribution
+file doesn't mention them), *Not in Fund Line Items*, *Total matches,
+accounts differ* (the right total, but not in the accounts or periods
+payroll charged, with nothing tying the lines back), or *Fund not in
+Fund Line Items* (not compared).
 
 Open a person to see their pay period by period — each period's totals
 and whether it lines up — and within each period every account
-combination they were charged to, with Labor Distribution against the
-ledger, and every line underneath: paired by transaction number, or
-marked *not in the ledger*, *no Labor Distribution line*, *same
-transaction, different amount*, or *posted to 512400 Faculty Longevity
-Pay* / *charged in Labor Distribution to 512100* when accounting posted a
-line to a different account than Labor Distribution shows.
+combination they were charged to, with Labor Distribution against Fund
+Line Items. Under each account the lines are listed **by report**: the
+*Labor Distribution* lines with their subtotal, then the *Fund Line
+Items* lines with theirs (subtotals are the green rows, and there is one
+for every report even when it has a single line), so the two reports
+can be compared side by side. Each line says how it fared on the other
+side: nothing when it pairs up by transaction number, or *not in Fund
+Line Items*, *no Labor Distribution line*, *Fund Line Items has … on
+this transaction*, or *posted to 512400 Faculty Longevity Pay* /
+*charged in Labor Distribution to 512100* when accounting posted a line
+to a different account than Labor Distribution shows.
 
-The ledger's side of this comes from **Fund Line Items** (DetailBalances
-only has account totals). A ledger line belongs to the person whose Labor
-Distribution transaction its *Ref Doc* names, or else to the person its
-"Accounting for *Name* Assignment name: …" text names. Ledger entries on
-salary accounts that are neither — journals, salary transfers — are
-listed below the people, per account: they're what explains an account
-total that differs when every person lines up.
+The posted side of this comes from **Fund Line Items** (DetailBalances
+only has account totals). A Fund Line Items line belongs to the person
+whose Labor Distribution transaction its *Ref Doc* names, or else to the
+person its "Accounting for *Name* Assignment name: …" text names. Fund
+Line Items entries on salary accounts that are neither — journals,
+salary transfers — are listed below the people, per account: they're
+what explains an account total that differs when every person lines up.
+
+### Narrowing the lists
 
 The **Period** menu above the list narrows everything — people, their
 totals and statuses, the tiles, and the account tab — to one period. A
 line charged in one period but posted in the next shows on both, as
 explained.
+
+Under it is a box for **each element of the chart string** — Entity,
+Fund, Department, Account, Program, Activity, InterCo, Future — and one
+for the **Person**. Each box takes a value (`512100`), the start of one
+(`512` for every 512xxx account), a range (`512100-512400`; a short
+range is widened to the segment, so `512-513` on Account is 512000 to
+513999), or a list separated by commas or spaces (`512100, 537600`).
+The Person box takes part of a name or a person number; since names hold
+commas, several people are separated by `;` (`Rivera; Chen`). On the
+By person tab the account boxes narrow each person to the accounts that
+match — their totals, status and the tiles follow, so "everyone paid
+from fund 1100001" is a one-box question; on the By account tab they
+pick the rows, and the Person box the rows someone is paid from (and,
+inside a row, which people are shown).
 
 **Hide lines that cancel out** leaves out pairs of lines for the same
 person, account combination and period whose amounts are exact opposites
@@ -109,27 +131,27 @@ the difference, and a status:
 
 | Status | Meaning |
 | --- | --- |
-| **Matches** | Payroll and the ledger agree. |
+| **Matches** | Labor Distribution and DetailBalances agree. |
 | **Does not match** | Both have amounts, and they differ. |
-| **Not in DetailBalances** | Payroll charged this combination; the ledger report has no row for it. |
-| **Ledger only** | The ledger shows salary-type activity on a combination no Labor Distribution line was charged to. |
+| **Not in DetailBalances** | Payroll charged this combination; DetailBalances has no row for it. |
+| **DetailBalances only** | DetailBalances shows salary-type activity on a combination no Labor Distribution line was charged to. |
 | **Fund not in DetailBalances** | Not compared: the DetailBalances report has no rows at all for this fund and department in the period, so it wasn't run for it. Not counted as a difference. |
 | **Explained — posted to another account** | The whole difference is lines accounting posted to a different GL account (or period) than Labor Distribution shows — see below. |
 
-Click a row to open it: the Labor Distribution lines sorted by person (with
-a subtotal per person), and — with Fund Line Items loaded — the lines that
-explain the difference:
-
-* **In the ledger, not in Labor Distribution** — e.g. a salary transfer or
-  correcting journal entry. Entries that aren't anyone's pay come first,
-  then payroll lines grouped by person (read from the line's "Accounting
-  for *Name* Assignment name: …" text) with a subtotal each. An account
-  combination holds everyone paid from it, so a Labor Distribution report
-  run for fewer people than the ledger covers leaves the others here; the
-  page says how many people that is.
-* **In Labor Distribution, not in the ledger** — e.g. a payroll line that
-  hasn't been accounted yet, or was posted elsewhere.
-* **Same transaction, different amount.**
+Click a row to open it. A sentence or two says how far apart the two
+reports are and what kind of lines account for it; then comes **each
+person** paid from the combination — their Labor Distribution and Fund
+Line Items totals for it, the difference, and a status — and under each
+person their lines **by report**: the *Labor Distribution* lines with a
+subtotal, then the *Fund Line Items* lines with a subtotal, every line
+noting how it fared on the other side (*not in Fund Line Items*, *no
+Labor Distribution line*, *posted to 512400 …*, and so on). People whose
+pay is in Fund Line Items but not in the Labor Distribution file (read
+from the line's "Accounting for *Name* Assignment name: …" text) are
+listed too, with no Labor Distribution lines; the page says how many
+there are. Fund Line Items entries that aren't anyone's pay — a salary
+transfer, a correcting journal — come last under **Not anyone's payroll
+line**, with their own subtotal.
 
 **Download Excel** saves a workbook with a *By person* sheet (each person,
 their accounts, and the lines that don't simply pair up), a *Summary* sheet, the *Labor
@@ -146,7 +168,7 @@ for lines set aside (below).
   The page shows each combination with its fund, GL account and activity
   code picked out ("Fund 1100001 · Account 512100 · Activity 0053"), so
   two activity codes on one fund are separate rows; typing an activity
-  code in the filter box shows just that activity.
+  code in the Activity box shows just that activity.
 * **Period.** Labor Distribution's *Fiscal Period - Payroll* (`27-02`) —
   the period DetailBalances lines up with; *Fiscal Period - LD* only if
   that's blank — is matched
@@ -155,14 +177,14 @@ for lines set aside (below).
   the DetailBalances report; Labor Distribution lines in other periods are
   listed separately as *not compared* — run both reports for the same
   period(s).
-* **Which ledger rows count.** Only the salary GL accounts,
+* **Which DetailBalances rows count.** Only the salary GL accounts,
   **511100–518900**, plus any listed in `EXTRA_SALARY_ACCOUNTS` (for now
   `537600` Joint Faculty Salaries) — both at the top of `reconcile.py`.
   Labor Distribution no longer carries fringe, so fringe (`528100`) and
   every other account in DetailBalances or Fund Line Items is left out,
   even on a line that names a person. Combinations Labor Distribution
   charged are always compared.
-* **Matching Fund Line Items to Labor Distribution.** A ledger line's
+* **Matching Fund Line Items to Labor Distribution.** A Fund Line Items line's
   *Ref Doc* is the Labor Distribution *Transaction Number*, so lines are
   paired by reference only — never by amount alone, which would pair two
   people paid the same. *Amount* is taken as signed: credits come out
@@ -170,12 +192,18 @@ for lines set aside (below).
   to DetailBalances exactly).
 * **Lines posted to another account.** Accounting re-maps some pay
   elements when it posts: a longevity payment Labor Distribution charges to
-  512100 Faculty Salaries lands on 512400 Faculty Longevity Pay. A Labor
-  Distribution line missing from its own account is looked up by its
-  transaction number across every account and period in Fund Line Items;
-  if it's found, both rows show it — "posted to 512400 Faculty Longevity
-  Pay" on one, "charged in Labor Distribution to …" on the other — and a
-  row whose whole difference is accounted for this way is marked
+  512100 Faculty Salaries lands on 512400 Faculty Longevity Pay, and
+  overtime charged to 516100 lands on 516200. A Labor Distribution line
+  missing from its own account is looked up by its transaction number
+  across every account and period in Fund Line Items — the line with the
+  same amount is taken, so a transaction that carries regular pay and
+  overtime pairs each part with its own posting. Failing that, a Fund
+  Line Items payroll line for the **same person, period and amount** on
+  another account, with no Labor Distribution line of its own, is taken
+  to be it, and the note says so ("same amount, no reference"). Either
+  way both rows show it — "posted to 516200 Overtime Pay" on one,
+  "charged in Labor Distribution to 516100" on the other — and a row
+  whose whole difference is accounted for this way is marked
   **Explained — posted to another account** rather than as a difference.
 * **Check on the Fund Line Items report.** For each combination its lines
   should add up to the DetailBalances amount; if not, the page says so —

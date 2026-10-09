@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Salary Reconciliation — a local page that lines up the Labor
-Distribution report against the General Ledger.
+Distribution report against DetailBalances and Fund Line Items.
 
 Drop the three exports — Labor Distribution, DetailBalances and Fund Line
 Items — into the data folder next to this file (or drag them onto the
 page), and the page shows, per account combination and
-fiscal period, whether payroll and the ledger agree, and for each
+fiscal period, whether payroll and the posted amounts agree, and for each
 difference which lines are missing on which side. Results download as an
 Excel workbook.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Salary reconciliation — Labor Distribution vs. the General Ledger.
+"""Salary reconciliation — Labor Distribution vs. DetailBalances and Fund Line Items.
 
 The business-office routine this automates:
 
@@ -9,12 +9,12 @@ The business-office routine this automates:
   2. Run the DetailBalances report (General Accounting), which gives the
      period's posted amount for every account combination.
   3. Where a combination's Labor Distribution total does not match the
-     ledger, run the Fund Line Items report to find out which lines differ.
+     DetailBalances, run the Fund Line Items report to find out which lines differ.
 
 This module reads the three exports (CSV or .xlsx, recognized by their
 header row, not their filename), lines them up per account combination and
-fiscal period, and for every difference lists the ledger lines with no
-Labor Distribution line behind them and vice versa. Fund Line Items lines
+fiscal period, and for every difference lists the Fund Line Items lines with
+no Labor Distribution line behind them and vice versa. Fund Line Items lines
 are tied to Labor Distribution lines by Ref Doc = Transaction Number.
 
 Standard library only. Also usable without the browser page:
@@ -56,7 +56,7 @@ SIGNATURES = {
 }
 HEADER_SEARCH_ROWS = 30
 # The salary GL accounts (per the business office: 511100-518900), plus
-# any outside that range. Only these are compared on the ledger side;
+# any outside that range. Only these are compared on the DetailBalances side;
 # fringe (528100 Negotiated Fringe Benefit Rate) and everything else is
 # left out — Labor Distribution no longer carries fringe.
 SALARY_ACCOUNT_RANGE = ("511100", "518900")
@@ -307,7 +307,7 @@ def _ld_sort_key(line):
 
 
 def _match_fli(ld_lines, fli_lines):
-    """Pair ledger lines with Labor Distribution lines by reference: Fund
+    """Pair Fund Line Items lines with Labor Distribution lines by reference: Fund
     Line Items' Ref Doc is the LD Transaction Number. (Not by amount: on a
     busy account two people paid the same would be paired by mistake.)
     Returns the pairs with equal amounts, those whose amounts differ, and
@@ -342,7 +342,7 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
     ld_periods = sorted({l["period"] for l in ld_ok}, key=period_sort_key)
     gl_periods = (sorted({g["period"] for g in gl_lines}, key=period_sort_key)
                   if gl_lines is not None else None)
-    # With a ledger report, compare the periods it covers; LD lines in
+    # With DetailBalances loaded, compare the periods it covers; LD lines in
     # other periods are reported, not compared.
     compared = gl_periods if gl_periods is not None else ld_periods
     compared_set = set(compared)
@@ -427,7 +427,7 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
                     and (d["moved_out"] or d["moved_in"]) and d["unexplained"] == 0):
                 row["status"] = "posted_elsewhere"
 
-    # People the ledger paid from these accounts whom the Labor Distribution
+    # People Fund Line Items shows paid from these accounts whom the Labor Distribution
     # file doesn't mention at all: it was run for fewer people (or funds).
     ld_names = {l["person"].lower() for l in ld_ok}
     missing_people = set()
@@ -464,40 +464,57 @@ def reconcile(ld_lines, gl_lines=None, fli_lines=None):
 
 def _posted_elsewhere(rows, fli_lines, claimed):
     """Find the Labor Distribution lines missing from their own account in
-    the ledger that were posted somewhere else — accounting re-maps some
-    pay elements (longevity pay charged to 512100 posts to 512400 Faculty
-    Longevity Pay), and a line can land in another period. Moves each such
-    pair out of the "missing" lists: on the LD side it's recorded as
-    moved_out, on the ledger side (if that combination is a row here) as
-    moved_in."""
+    Fund Line Items that were posted somewhere else — accounting re-maps
+    some pay elements (longevity pay charged to 512100 posts to 512400
+    Faculty Longevity Pay; overtime charged to 516100 posts to 516200), and
+    a line can land in another period. Moves each such pair out of the
+    "missing" lists: on the LD side it's recorded as moved_out, on the Fund
+    Line Items side (if that combination is a row here) as moved_in.
+
+    A line is found by its reference first (Ref Doc = Transaction Number),
+    anywhere. Failing that, a Fund Line Items payroll line for the same
+    person, in the same period, for the same amount, on another account,
+    with no Labor Distribution line of its own, is taken to be it — a
+    posting that lost its reference on the way — and marked by_amount."""
     by_ref = {}
     for f in fli_lines:
         if f["ref"] and id(f) not in claimed:
             by_ref.setdefault(f["ref"], []).append(f)
-    owner = {}  # id(ledger line) -> the row listing it as ledger-only
+    owner = {}  # id(Fund Line Items line) -> the row listing it as unmatched
+    by_person = {}  # (person, period) -> that person's unmatched payroll lines
     for row in rows:
         d = row["fli"]
         if d.get("covered"):
             for f in d["gl_only"]:
                 owner.setdefault(id(f), row)
+                if f["person"]:
+                    by_person.setdefault((_name_key(f["person"]), f["period"]), []).append(f)
     for row in rows:
         d = row["fli"]
         if not d.get("covered"):
             continue
+        here = row["combo"].split("-")[:FLI_SEGMENTS]
         for ld in list(d["ld_only"]):
             f = next((f for f in by_ref.get(ld["txn"], [])
                       if f["amount"] == ld["amount"] and id(f) not in claimed), None)
+            by_amount = False
+            if f is None:
+                f = next((f for f in by_person.get((_name_key(ld["person"]), row["period"]), [])
+                          if f["amount"] == ld["amount"] and id(f) not in claimed
+                          and list(f["key"]) != here), None)
+                by_amount = f is not None
             if f is None:
                 continue
             claimed.add(id(f))
             d["ld_only"].remove(ld)
             d["moved_out"].append({"ld": ld, "gl": f, "to": combo_text(f["key"]),
-                                   "to_period": f["period"]})
+                                   "to_period": f["period"], "by_amount": by_amount})
             target = owner.get(id(f))
             if target is not None:
                 target["fli"]["gl_only"].remove(f)
                 target["fli"]["moved_in"].append({"ld": ld, "gl": f, "from": row["combo"],
-                                                  "from_period": row["period"]})
+                                                  "from_period": row["period"],
+                                                  "by_amount": by_amount})
 
 
 def _name_key(name):
@@ -505,19 +522,22 @@ def _name_key(name):
 
 
 def by_person(ld_lines, fli_lines, compared_set):
-    """Each person's Labor Distribution against what the ledger posted for
+    """Each person's Labor Distribution against what Fund Line Items posted for
     them, per account combination and period.
 
-    The ledger's side comes from Fund Line Items: a line belongs to the
+    The posted side comes from Fund Line Items: a line belongs to the
     person whose Labor Distribution transaction its Ref Doc names, or else
-    to the person its "Accounting for <name>" text names. Ledger lines on
-    salary accounts that are neither (journals, transfers, purchase orders)
-    are returned separately, per account, as `unattributed`.
+    to the person its "Accounting for <name>" text names. Fund Line Items
+    lines on salary accounts that are neither (journals, transfers,
+    purchase orders) are returned separately, per account, as
+    `unattributed`.
 
     fli_lines may be None (not loaded): each person then has their Labor
     Distribution only, status "unchecked"."""
     ld_lines = [l for l in ld_lines if l["period"] in compared_set]
     by_txn = {l["txn"]: l for l in ld_lines if l["txn"]}
+    # combinations Labor Distribution charged are compared whatever the account
+    ld_keys = {(l["combo"][:FLI_SEGMENTS], l["period"]) for l in ld_lines}
     people = {}
 
     def person(name, number=""):
@@ -535,7 +555,7 @@ def by_person(ld_lines, fli_lines, compared_set):
             continue
         coverage.add((f["key"][1], f["period"]))
         names.setdefault(f["key"][3], f["account_name"])
-        if not salary_account(f["key"][3]):
+        if not salary_account(f["key"][3]) and (f["key"], f["period"]) not in ld_keys:
             continue  # fringe and the rest: not what Labor Distribution carries
         ld = by_txn.get(f["ref"])
         if ld is not None:
@@ -575,15 +595,15 @@ def _person_summary(cells, checked):
         status = "unchecked"
     elif not compared:
         status = "not_covered"
-    elif not any(c["ld_lines"] for c in cells):
-        status = "not_in_ld"
     elif all(c["status"] == "match" for c in compared):
         status = "match"
     elif all(c["status"] in ("match", "explained") for c in compared):
         # every difference is a line posted to another account or period;
         # over all of a person's accounts those net to zero, but one
-        # period's may not (a line posted in the next period)
+        # period's (or one account's) may not
         status = "explained"
+    elif not any(c["ld_lines"] for c in cells):
+        status = "not_in_ld"
     elif gl_total == 0 and not any(c["gl_lines"] for c in compared):
         status = "not_in_ledger"
     elif gl_total == ld_total:
@@ -617,31 +637,69 @@ def _person_cells(p, coverage, names, checked):
     # line accounting posted to another account (or period).
     gl_by_ref = {}
     for f in p["gl"]:
-        gl_by_ref.setdefault(f["ref"], []).append(f)
+        if f["ref"]:
+            gl_by_ref.setdefault(f["ref"], []).append(f)
     paired = set()
-    for l in sorted(p["ld"], key=_ld_sort_key):
-        here = cells[(l["combo"][:FLI_SEGMENTS], l["period"])]
-        candidates = [f for f in gl_by_ref.get(l["txn"], []) if id(f) not in paired]
-        same = [f for f in candidates if (f["key"], f["period"]) == (here["key"], here["period"])]
-        f = next((f for f in same if f["amount"] == l["amount"]), None) or \
-            next(iter(same), None) or next(iter(candidates), None)
-        if f is None:
-            here["lines"].append({"kind": "ld_only", "ld": l, "gl": None})
-            continue
-        paired.add(id(f))
-        if any(f is x for x in same):
-            here["lines"].append({"kind": "pair" if f["amount"] == l["amount"] else "amount_differs",
-                                  "ld": l, "gl": f})
-        else:
-            there = cells[(f["key"], f["period"])]
-            here["lines"].append({"kind": "moved_out", "ld": l, "gl": f,
-                                  "other": combo_text(f["key"]), "other_period": f["period"],
-                                  "other_name": f["account_name"]})
-            there["lines"].append({"kind": "moved_in", "ld": l, "gl": f,
-                                   "other": combo_text(l["combo"]), "other_period": l["period"]})
+
+    def moved(here, l, f, by_amount=False):
+        there = cells[(f["key"], f["period"])]
+        here["lines"].append({"kind": "moved_out", "ld": l, "gl": f,
+                              "other": combo_text(f["key"]), "other_period": f["period"],
+                              "other_name": f["account_name"], "by_amount": by_amount})
+        there["lines"].append({"kind": "moved_in", "ld": l, "gl": f,
+                               "other": combo_text(l["combo"]), "other_period": l["period"],
+                               "by_amount": by_amount})
+
+    # Every line gets its exact amount first — on the same account, or
+    # posted to another one (one transaction can carry regular pay and
+    # overtime, and accounting posts the overtime to 516200 while Labor
+    # Distribution charged both to 516100) — and only what's left is paired
+    # with a different amount on the same transaction.
+    ld_sorted = sorted(p["ld"], key=_ld_sort_key)
+    ld_left = list(ld_sorted)
+    for exact in (True, False):
+        for l in list(ld_left):
+            here = cells[(l["combo"][:FLI_SEGMENTS], l["period"])]
+            candidates = ([f for f in gl_by_ref.get(l["txn"], []) if id(f) not in paired]
+                          if l["txn"] else [])
+            if exact:
+                candidates = [f for f in candidates if f["amount"] == l["amount"]]
+            same = [f for f in candidates if (f["key"], f["period"]) == (here["key"], here["period"])]
+            f = next(iter(same), None) or next(iter(candidates), None)
+            if f is None:
+                continue
+            paired.add(id(f))
+            ld_left.remove(l)
+            if any(f is x for x in same):
+                here["lines"].append({"kind": "pair" if exact else "amount_differs", "ld": l, "gl": f})
+            else:
+                moved(here, l, f)
+    for l in ld_left:
+        cells[(l["combo"][:FLI_SEGMENTS], l["period"])]["lines"].append(
+            {"kind": "ld_only", "ld": l, "gl": None})
     for f in p["gl"]:
         if id(f) not in paired:
             cell(f["key"], f["period"])["lines"].append({"kind": "gl_only", "ld": None, "gl": f})
+
+    # A Labor Distribution line with no Fund Line Items line, and a Fund
+    # Line Items line for this person in the same period for the same
+    # amount on another account with no Labor Distribution line: one line
+    # posted to another account, with nothing but the amount tying them.
+    if checked:
+        unmatched = [(c, x) for c in cells.values() for x in c["lines"] if x["kind"] == "gl_only"]
+        for here in cells.values():
+            for x in [x for x in here["lines"] if x["kind"] == "ld_only"]:
+                found = next(((there, y) for there, y in unmatched
+                              if there is not here and there["period"] == here["period"]
+                              and y["kind"] == "gl_only" and y["gl"]["amount"] == x["ld"]["amount"]),
+                             None)
+                if found is None:
+                    continue
+                there, y = found
+                here["lines"].remove(x)
+                there["lines"].remove(y)
+                y["kind"] = "used"
+                moved(here, x["ld"], y["gl"], by_amount=True)
 
     out = []
     for (key, per), c in sorted(cells.items(), key=lambda kv: (period_sort_key(kv[0][1]), kv[0][0])):
@@ -691,7 +749,7 @@ def _fli_detail(combo, per, ld_lines_b, gl_total, fli_index, fli_coverage, claim
     return {
         "covered": True,
         "total": fli_total,
-        # Fund Line Items should add up to the ledger's period activity;
+        # Fund Line Items should add up to DetailBalances' period activity;
         # if not, it was run for a different range and the lists below
         # are incomplete.
         "agrees_with_gl": gl_total is None or fli_total == gl_total,
@@ -819,7 +877,7 @@ STATUS_TEXT = {
     "mismatch": "Does not match",
     "not_in_gl": "Not in DetailBalances",
     "gl_not_run": "Not compared: fund not in DetailBalances",
-    "gl_only": "In ledger, no Labor Distribution",
+    "gl_only": "In DetailBalances, no Labor Distribution",
     "posted_elsewhere": "Explained: posted to another account/period",
     "unchecked": "Not compared (no DetailBalances)",
 }
@@ -830,11 +888,17 @@ PERSON_STATUS_TEXT = {
     "explained": "Explained: posted to another account/period",
     "mismatch": "Does not match",
     "not_in_ld": "Not in Labor Distribution",
-    "not_in_ledger": "Not in the ledger",
+    "not_in_ledger": "Not in Fund Line Items",
     "accounts_differ": "Total matches, accounts differ",
     "not_covered": "Not compared: fund not in Fund Line Items",
     "unchecked": "Not compared (no Fund Line Items)",
 }
+
+
+def _moved_note(x):
+    """How a line posted to another account was tied to its Labor
+    Distribution line, for a note."""
+    return " (same amount, no reference)" if x.get("by_amount") else ""
 
 
 def cancelled(items, group, amounts):
@@ -885,8 +949,8 @@ def export_workbook(result, sources=None, hide_cancelled=False):
 
     summary = [["Account combination", "Fund", "Department", "Account", "Program",
                 "Activity", "Period", "Labor Distribution", "DetailBalances",
-                "Difference", "Status", "People", "Fund Line Items: in ledger only",
-                "Fund Line Items: in LD only"]]
+                "Difference", "Status", "People", "Lines only in Fund Line Items",
+                "Lines only in Labor Distribution"]]
     for r in result["rows"]:
         s = r["segments"]
         fli = r["fli"] or {}
@@ -940,21 +1004,21 @@ def export_workbook(result, sources=None, hide_cancelled=False):
                             lambda m: (m["ld"]["person"], m["from"], m["from_period"]),
                             lambda m: (m["gl"]["amount"],))
         for f in gl_only:
-            diff_sheet.append([r["combo"], r["period"], "In ledger, not in Labor Distribution",
+            diff_sheet.append([r["combo"], r["period"], "In Fund Line Items, not in Labor Distribution",
                                f["posted"],
                                f"{f['person']} — {f['assignment']}" if f["person"]
                                else f["text"] or f["header_text"], _amt(f["amount"]),
                                f["ref"], f["doc"], f["doc_type"], f["user"]])
         for l in ld_only:
-            diff_sheet.append([r["combo"], r["period"], "In Labor Distribution, not in ledger",
+            diff_sheet.append([r["combo"], r["period"], "In Labor Distribution, not in Fund Line Items",
                                l["pay_start"], f"{l['person']} — {l['pay_element']}",
                                _amt(l["amount"]), l["txn"], "", "", ""])
         for m in amount_differs:
-            diff_sheet.append([r["combo"], r["period"], "Amount differs (ledger side)",
+            diff_sheet.append([r["combo"], r["period"], "Amount differs (Fund Line Items side)",
                                m["gl"]["posted"], m["gl"]["text"], _amt(m["gl"]["amount"]),
                                m["gl"]["ref"], m["gl"]["doc"], m["gl"]["doc_type"],
                                m["gl"]["user"]])
-            diff_sheet.append([r["combo"], r["period"], "Amount differs (LD side)",
+            diff_sheet.append([r["combo"], r["period"], "Amount differs (Labor Distribution side)",
                                m["ld"]["pay_start"],
                                f"{m['ld']['person']} — {m['ld']['pay_element']}",
                                _amt(m["ld"]["amount"]), m["ld"]["txn"], "", "", ""])
@@ -962,21 +1026,22 @@ def export_workbook(result, sources=None, hide_cancelled=False):
             g = m["gl"]
             diff_sheet.append([r["combo"], r["period"],
                                f"Posted to {g['key'][3]} {g['account_name']} in {m['to_period']}"
-                               f" ({m['to']})",
+                               f" ({m['to']}){_moved_note(m)}",
                                g["posted"], f"{m['ld']['person']} — {m['ld']['pay_element']}",
                                _amt(m["ld"]["amount"]), m["ld"]["txn"], g["doc"],
                                g["doc_type"], g["user"]])
         for m in moved_in:
             g = m["gl"]
             diff_sheet.append([r["combo"], r["period"],
-                               f"Charged in Labor Distribution to {m['from']} ({m['from_period']})",
+                               f"Charged in Labor Distribution to {m['from']} ({m['from_period']})"
+                               f"{_moved_note(m)}",
                                g["posted"], f"{m['ld']['person']} — {m['ld']['pay_element']}",
                                _amt(g["amount"]), g["ref"], g["doc"], g["doc_type"], g["user"]])
         if n1 + n2 + n3 + n4 + n5:
             diff_sheet.append([r["combo"], r["period"], _cancel_note(n1 + n2 + n3 + n4 + n5)])
 
     person_sheet = [["Person", "Person number", "Account combination", "Account", "Period",
-                     "Line", "Transaction / reference", "Labor Distribution", "Ledger",
+                     "Line", "Transaction / reference", "Labor Distribution", "Fund Line Items",
                      "Difference", "Status / note"]]
     checked = result["loaded"][FLI]
     for p in result["people"]:
@@ -1001,12 +1066,12 @@ def export_workbook(result, sources=None, hide_cancelled=False):
             for x in odd:
                 ld, gl = x["ld"], x["gl"]
                 note = {"amount_differs": "Same transaction, different amount",
-                        "ld_only": "Not in the ledger",
+                        "ld_only": "Not in Fund Line Items",
                         "gl_only": "No Labor Distribution line",
                         "moved_out": f"Posted to {x.get('other', '')} {x.get('other_name', '')}"
-                                     f" ({x.get('other_period', '')})",
+                                     f" ({x.get('other_period', '')}){_moved_note(x)}",
                         "moved_in": f"Charged in Labor Distribution to {x.get('other', '')}"
-                                    f" ({x.get('other_period', '')})"}[x["kind"]]
+                                    f" ({x.get('other_period', '')}){_moved_note(x)}"}[x["kind"]]
                 person_sheet.append([p["name"], p["number"], c["combo"], c["account_name"],
                                      c["period"],
                                      ld["pay_element"] if ld else (gl["assignment"] or gl["text"]),

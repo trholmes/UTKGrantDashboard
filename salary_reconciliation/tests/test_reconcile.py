@@ -410,6 +410,64 @@ class BusinessOfficeRules(unittest.TestCase):
         self.assertEqual({c["account"] for c in p["cells"]}, {"512100"})
         self.assertNotIn("528100", {g["account"] for g in result["unattributed"]})
 
+    def _overtime(self, same_reference):
+        """Pat is paid hourly from 516100: regular pay 1,000.00 and overtime
+        200.00, both charged there by Labor Distribution. Accounting posts
+        the overtime to 516200 Overtime Pay — on the same transaction as
+        the regular pay, or with no reference back at all."""
+        found, _ = reconcile.load(demo_files())
+        hourly = "10-1100001-106015-516100-210-0000-00-0000"
+        overtime = "10-1100001-106015-516200-210-0000-00-0000"
+        ld0 = found[reconcile.LD][1][0]
+        ld = found[reconcile.LD][1] + [
+            dict(ld0, person="Hourly, Pat", person_number="00100009", assignment="Technician",
+                 pay_element="UT Hourly Earnings Results", txn="40000001", amount=100000,
+                 combo=tuple(hourly.split("-"))),
+            dict(ld0, person="Hourly, Pat", person_number="00100009", assignment="Technician",
+                 pay_element="Ern E Overtime Earnings Results", txn="40000001", amount=20000,
+                 combo=tuple(hourly.split("-")))]
+        gl = found[reconcile.GL][1] + [
+            {"combo": tuple(c.split("-")), "period": "27-03", "beginning": 0,
+             "activity": a, "ending": a} for c, a in ((hourly, 100000), (overtime, 20000))]
+        f0 = next(f for f in found[reconcile.FLI][1] if f["ref"] == "30000001")
+        pat = dict(f0, text="Accounting for Hourly, Pat Assignment name: Technician",
+                   person="Hourly, Pat", assignment="Technician")
+        fli = found[reconcile.FLI][1] + [
+            dict(pat, key=tuple(hourly.split("-"))[:6], amount=100000, ref="40000001",
+                 account_name="Hourly Wages"),
+            dict(pat, key=tuple(overtime.split("-"))[:6], amount=20000,
+                 ref="40000001" if same_reference else "", account_name="Overtime Pay")]
+        result = reconcile.reconcile(ld, gl, fli)
+        return result, row(result, hourly), row(result, overtime)
+
+    def test_overtime_posted_to_516200_on_the_same_transaction(self):
+        result, hourly, overtime = self._overtime(same_reference=True)
+        self.assertEqual((hourly["status"], overtime["status"]), ("posted_elsewhere", "posted_elsewhere"))
+        [out] = hourly["fli"]["moved_out"]
+        self.assertEqual((out["ld"]["amount"], out["gl"]["key"][3], out["by_amount"]), (20000, "516200", False))
+        pat = person(result, "Hourly, Pat")
+        self.assertEqual((pat["status"], pat["diff"]), ("explained", 0))
+        by_account = {c["account"]: c for c in pat["cells"]}
+        # the regular pay pairs with its own line, not with the overtime's
+        self.assertEqual(sorted(x["kind"] for x in by_account["516100"]["lines"]), ["moved_out", "pair"])
+        self.assertEqual([x["kind"] for x in by_account["516200"]["lines"]], ["moved_in"])
+        self.assertFalse(any(x.get("by_amount") for c in pat["cells"] for x in c["lines"]))
+
+    def test_overtime_posted_to_516200_without_a_reference(self):
+        result, hourly, overtime = self._overtime(same_reference=False)
+        self.assertEqual((hourly["status"], overtime["status"]), ("posted_elsewhere", "posted_elsewhere"))
+        [out] = hourly["fli"]["moved_out"]
+        self.assertEqual((out["ld"]["txn"], out["gl"]["key"][3], out["by_amount"]), ("40000001", "516200", True))
+        self.assertEqual(overtime["fli"]["gl_only"], [])
+        pat = person(result, "Hourly, Pat")
+        self.assertEqual(pat["status"], "explained")
+        by_account = {c["account"]: c for c in pat["cells"]}
+        [moved] = [x for x in by_account["516100"]["lines"] if x["kind"] == "moved_out"]
+        self.assertEqual((moved["by_amount"], moved["other_name"]), (True, "Overtime Pay"))
+        self.assertEqual([x["kind"] for x in by_account["516200"]["lines"]], ["moved_in"])
+        # someone else's unmatched line of the same amount is never taken
+        self.assertEqual(person(result, "Okafor, Grace")["status"], "mismatch")
+
     def test_right_total_in_the_wrong_accounts(self):
         """Money that reached the right total through accounts payroll didn't
         charge, without a reference tying it back, is its own status."""
