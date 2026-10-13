@@ -317,6 +317,8 @@ table.charges-lines td.desc-cell { max-width: 34ch; overflow: hidden; text-overf
   display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px;
 }
 .getdata-row.dl-row { margin-top: 14px; }
+.window-row { gap: 14px; }
+.window-note { max-width: 80ch; margin-top: 6px; }
 .btn.primary {
   font-size: 14px; font-weight: 600; padding: 8px 16px; text-decoration: none;
   border-color: var(--series-1); color: var(--series-1);
