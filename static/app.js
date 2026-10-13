@@ -351,7 +351,12 @@ function renderStatus() {
   const where = PI ? `${folderLabel()} · ` : '';
   const note = skipped.length
     ? ` · ${skipped.length} file${skipped.length === 1 ? '' : 's'} not recognized (see below)` : '';
-  $('#data-status').textContent = `As of ${DATA.generated} · ${where}${parts}${note}`;
+  // a top-up that landed shows up here first: the history now runs later
+  const cov = DATA.coverage
+    ? ` · detail history through ${DATA.coverage.to}`
+      + (Object.keys(DATA.coverage.gaps || {}).length ? ' (with holes — see Get fresh data)' : '')
+    : '';
+  $('#data-status').textContent = `As of ${DATA.generated} · ${where}${parts}${cov}${note}`;
 
   // files that are there but not read — say so, and why, rather than
   // letting "reload did nothing" be the only clue
@@ -1800,11 +1805,23 @@ function renderChargesResults() {
 
   // an empty month can mean "nothing charged" or "the export doesn't cover
   // it" — very different answers when checking that everything is there
-  const uncovered = CHARGES.projects
-    .map((id) => DATA.projects.find((p) => p.id === id))
+  const looked = CHARGES.projects.map((id) => DATA.projects.find((p) => p.id === id));
+  const uncovered = looked
     .filter((p) => p && p.detailWindow
       && ((st.from && st.from < p.detailWindow[0])
           || (st.to || DATA.today) > p.detailWindow[1]));
+  // a hole between two exports (a top-up that started too late) inside
+  // the asked-for window
+  const holed = looked.filter((p) => p && (p.detailGaps || []).some((g) =>
+    (!st.from || g[1] >= st.from) && g[0] <= (st.to || DATA.today)));
+  if (holed.length) {
+    out.append(el('p', { class: 'charges-coverage' },
+      '⚠ No export covers '
+      + holed.map((p) => p.detailGaps.map((g) => `${g[0]} → ${g[1]}`).join(', ')
+        + (multi ? ` on ${p.id}` : '')).join('; ')
+      + ' — those months look empty even if charges exist. Under Get fresh '
+      + 'data, "Just what\'s new" starts early enough to fill the hole.'));
+  }
   if (uncovered.length) {
     // group awards sharing the same export window into one clause
     const byWin = new Map();
@@ -1980,8 +1997,43 @@ function fetchState() {
   if (typeof st.extra !== 'string') st.extra = '';
   if (typeof st.autoImport !== 'boolean') st.autoImport = true;
   if (st.mode !== 'per-project') st.mode = 'combined';
+  // which window the download is for: 'topup' adds the newest charges on
+  // top of the detail exports in hand (the usual case once there are
+  // some), 'all' is the whole history, 'custom' is a typed from-date
+  if (!['topup', 'all', 'custom'].includes(st.window)) {
+    st.window = DATA.coverage ? 'topup' : 'all';
+  }
   if (!st.from) st.from = defaultFrom();
   return st;
+}
+
+function windowChoice(st) {
+  // a top-up with nothing to top up (a fresh folder, every detail export
+  // taken out) is the whole history; the saved choice is left alone so it
+  // comes back once a detail export is in
+  return st.window === 'topup' && !DATA.coverage ? 'all' : st.window;
+}
+
+function windowFrom(st) {
+  // the from-date the current window choice stands for
+  const choice = windowChoice(st);
+  if (choice === 'topup') return topUpFrom() || defaultFrom();
+  if (choice === 'all') return defaultFrom();
+  return st.from;
+}
+
+function selectedProjects() {
+  const excluded = new Set(fetchState().excluded);
+  return DATA.projects.filter((p) => !excluded.has(p.id));
+}
+
+function topUpFrom() {
+  // the earliest of the ticked awards' own top-up dates (the server works
+  // each one out: the first gap in its coverage, else a few months before
+  // the coverage ends, else the award start when it has no history yet),
+  // so one download tops up every one of them
+  const dates = selectedProjects().map((p) => p.topUpFrom).filter(Boolean).sort();
+  return dates[0] || null;
 }
 
 function isActive(p) {
@@ -2083,8 +2135,9 @@ function renderGetData() {
     el('div', { class: 'step-head' }, el('span', { class: 'step-num' }, '2'),
       'Expenditure detail report — transactions, salaries, F&A'),
     el('div', { class: 'hint' }, known
-      ? 'Pick the projects and the window. Wider is better: burn rates and '
-        + 'seasonality come from this history.'
+      ? 'Pick the projects and the window. The first time, wider is better: '
+        + 'burn rates and seasonality come from this history. After that, '
+        + 'just what\'s new is enough — it goes on top of what is in hand.'
       : 'Type your project numbers — they are the SPN codes on your award '
         + 'notices, and every one of them appears in the PI Dashboard export '
         + 'above. Once that export is in, they show up here as checkboxes.'),
@@ -2103,17 +2156,8 @@ function renderGetData() {
           value: st.extra, size: known ? 24 : 40,
           oninput: (e) => { st.extra = e.target.value; save(); refreshLinks(); },
         }))),
-    el('div', { class: 'getdata-row' },
-      el('label', { class: 'check' }, 'From ',
-        el('input', {
-          type: 'date', value: st.from,
-          onchange: (e) => { st.from = e.target.value || defaultFrom(); save(); refreshLinks(); },
-        })),
-      el('label', { class: 'check' }, 'through ',
-        el('input', {
-          type: 'date', value: st.to || DATA.today,
-          onchange: (e) => { st.to = e.target.value || null; save(); refreshLinks(); },
-        }))));
+    windowRow(st),
+    el('div', { class: 'hint window-note', id: 'window-note' }, windowNote(st)));
 
   // no href until the URL is built, which the stylesheet shows as disabled
   const link = el('a', {
@@ -2146,6 +2190,73 @@ function renderGetData() {
 
   refreshLinks();
   refreshInbox();
+}
+
+function windowRow(st) {
+  // three ways to set the window's start: just what's new (a top-up of the
+  // exports in hand), everything, or a typed date — then the end
+  const choice = (key, label, title) => el('label', { class: 'check', title },
+    el('input', {
+      type: 'radio', name: 'window', checked: windowChoice(st) === key || null,
+      onchange: () => { st.window = key; save(); renderGetData(); },
+    }), ' ', label);
+  const fromBox = el('input', {
+    type: 'date', value: windowFrom(st),
+    onchange: (e) => {
+      // typing a date is choosing it
+      st.window = 'custom';
+      st.from = e.target.value || defaultFrom();
+      save(); renderGetData();
+    },
+  });
+  return el('div', { class: 'getdata-row window-row' },
+    DATA.coverage ? choice('topup', 'Just what\'s new',
+      'The newest charges, to go on top of the detail exports already in '
+      + folderLabel()) : null,
+    choice('all', 'Everything', 'The whole history, back to the oldest award start'),
+    el('label', { class: 'check' }, 'From ', fromBox),
+    el('label', { class: 'check' }, 'through ',
+      el('input', {
+        type: 'date', value: st.to || DATA.today,
+        onchange: (e) => { st.to = e.target.value || null; save(); refreshLinks(); },
+      })));
+}
+
+function windowNote(st) {
+  // why the window starts where it does — and, for a top-up, what it rests on
+  const cov = DATA.coverage;
+  const choice = windowChoice(st);
+  if (choice !== 'topup') {
+    return choice === 'all'
+      ? 'The whole history, back to the oldest award start. Wider is better: '
+        + 'burn rates and seasonality come from it.'
+      : 'A window of your own. Overlap with the exports already in '
+        + folderLabel() + ' is fine: a charge in two exports is counted once.';
+  }
+  const picked = selectedProjects();
+  const gaps = picked.filter((p) => p.detailGaps && p.detailGaps.length);
+  const fresh = picked.filter((p) => !p.detailWindow);
+  const parts = [
+    'Adds the newest charges on top of the detail exports in ' + folderLabel()
+    + ', which run through ' + cov.to
+    + (cov.latestCharge ? ` (latest charge ${cov.latestCharge})` : '')
+    + `. The window starts ${cov.overlapMonths} months earlier because charges `
+    + 'post late (payroll, expense reports, cost transfers); a charge already '
+    + 'in hand is counted once, so the overlap costs nothing.',
+  ];
+  if (gaps.length) {
+    parts.push(gaps.map((p) => `${p.id} has a hole in its history, `
+      + p.detailGaps.map((g) => `${g[0]} → ${g[1]}`).join(' and ')
+      + ', that no export covers').join('; ')
+      + ' — the window starts early enough to fill it.');
+  }
+  if (fresh.length) {
+    parts.push(fresh.map((p) => p.id).join(', ')
+      + (fresh.length === 1 ? ' has' : ' have') + ' no detail history yet, so '
+      + 'the window starts at ' + (fresh.length === 1 ? 'its' : 'their earliest')
+      + ' award start.');
+  }
+  return parts.join(' ');
 }
 
 function troubleshooting(st) {
@@ -2197,7 +2308,8 @@ async function refreshLinks() {
     $('#dl-link').removeAttribute('href');
     return;
   }
-  const params = new URLSearchParams({ projects: projects.join(' '), from: st.from, mode: st.mode });
+  const params = new URLSearchParams({
+    projects: projects.join(' '), from: windowFrom(st), mode: st.mode });
   if (st.to) params.set('to', st.to);
   if (st.template) params.set('template', st.template);
   try {
@@ -2316,7 +2428,9 @@ function renderInbox() {
     const have = DATA.files.filter((f) => f.type === kind);
     if (have.length) {
       box.append(el('div', { class: 'have-note' }, '✓ In ' + folderLabel() + ': '
-        + have.map((f) => `${f.name} (${f.modified})`).join(', ')));
+        + have.map((f) => `${f.name} (${f.modified})`).join(', ')
+        + (kind === 'detail' && DATA.coverage
+          ? ' — ' + coverageText(have.length > 1 ? 'together they cover' : 'it covers') : '')));
     }
   }
   if (!INBOX || !INBOX.dir) {
@@ -2334,6 +2448,19 @@ function renderInbox() {
   inboxBlock(boxes.pi_dashboard, 'pi_dashboard',
     files.filter((f) => f.type === 'pi_dashboard'), INBOX.unrecognized || []);
   inboxBlock(boxes.detail, 'detail', files.filter((f) => f.type === 'detail'), []);
+}
+
+function coverageText(lead) {
+  // the detail history in hand, as one clause: span, newest charge, holes
+  const cov = DATA.coverage;
+  if (!cov) return '';
+  const holes = Object.entries(cov.gaps || {});
+  return `${lead} ${cov.from} → ${cov.to}`
+    + (cov.latestCharge ? `, latest charge ${cov.latestCharge}` : '')
+    + (holes.length
+      ? '; not covered: ' + holes.map(([id, gaps]) =>
+        `${gaps.map((g) => `${g[0]} → ${g[1]}`).join(', ')} on ${id}`).join('; ')
+      : '');
 }
 
 function inboxBlock(box, kind, files, unrecognized) {

@@ -250,6 +250,11 @@ def _desc_columns(headers, prefix):
     return hits
 
 
+def _cents(amount):
+    """An amount as whole cents, for de-duplication keys (None stays None)."""
+    return None if amount is None else int(round(amount * 100))
+
+
 def _first_desc(row, cols):
     for c in cols:
         v = (row.get(c) or "").strip()
@@ -264,7 +269,14 @@ def parse_detail(path, labor, nonlabor, meta):
     The reporting tool emits the cartesian product of labor x non-labor
     transactions (every labor line paired with every non-labor line), so we
     de-duplicate each side on its own key. Results accumulate into the
-    passed-in dicts so several export files merge cleanly.
+    passed-in dicts so several export files merge cleanly — which is also
+    what makes a top-up export (the newest months only, pulled to go on
+    top of the exports already in hand) safe: a charge that is in both the
+    old export and the new one has the same key and is counted once. The
+    key is built from the charge's own identity (project, transaction
+    number, date, type, person, amount to the cent, description) rather
+    than the raw cell text, so a run that pads or formats a cell
+    differently still matches.
     """
     info = spn_reports.find_header(path) or {"encoding": "utf-8-sig", "line": 0, "delimiter": ","}
     with _open_counting(path, info["encoding"]) as f:
@@ -299,11 +311,12 @@ def parse_detail(path, labor, nonlabor, meta):
             l_amt = fnum(r.get("L_EXP_COST"))
             if l_trx or l_amt is not None:
                 l_desc = _first_desc(r, l_desc_cols)
+                l_date = fdate(r.get("L_EXP_DATE"))
                 key = (proj, l_trx, (r.get("L_LAB_TRX") or "").strip(),
                        (r.get("L_PER_NUM") or "").strip(),
-                       (r.get("L_EXP_DATE") or "").strip(),
+                       l_date or (r.get("L_EXP_DATE") or "").strip(),
                        (r.get("L_EXP_TYPE") or "").strip(),
-                       r.get("L_EXP_COST"), l_desc)
+                       _cents(l_amt), l_desc)
                 if key not in labor:
                     labor[key] = {
                         "project": proj,
@@ -311,7 +324,7 @@ def parse_detail(path, labor, nonlabor, meta):
                         "trx": l_trx,
                         "category": (r.get("L_EXP_CAT") or "").strip(),
                         "type": (r.get("L_EXP_TYPE") or "").strip(),
-                        "date": fdate(r.get("L_EXP_DATE")),
+                        "date": l_date,
                         "person": (r.get("L_PER_NAME") or "").strip(),
                         "desc": l_desc,
                         "vendor": "",
@@ -324,11 +337,12 @@ def parse_detail(path, labor, nonlabor, meta):
             if nl_trx or nl_amt is not None:
                 nl_desc = _first_desc(r, nl_desc_cols)
                 nl_vend = _first_desc(r, nl_vend_cols)
+                nl_date = fdate(r.get("NL_EXP_DATE"))
                 key = (proj, nl_trx,
-                       (r.get("NL_EXP_DATE") or "").strip(),
+                       nl_date or (r.get("NL_EXP_DATE") or "").strip(),
                        (r.get("NL_EXP_TYPE") or "").strip(),
                        (r.get("NL_PER_NAME") or "").strip(),
-                       r.get("NL_EXP_COST"), nl_desc, nl_vend)
+                       _cents(nl_amt), nl_desc, nl_vend)
                 if key not in nonlabor:
                     nonlabor[key] = {
                         "project": proj,
@@ -336,7 +350,7 @@ def parse_detail(path, labor, nonlabor, meta):
                         "trx": nl_trx,
                         "category": (r.get("NL_EXP_CAT") or "").strip(),
                         "type": (r.get("NL_EXP_TYPE") or "").strip(),
-                        "date": fdate(r.get("NL_EXP_DATE")),
+                        "date": nl_date,
                         "person": (r.get("NL_PER_NAME") or "").strip(),
                         "desc": nl_desc,
                         "vendor": nl_vend,
@@ -852,6 +866,11 @@ def _analyze(data_dir, root, today_iso, this_month, files_info, dash_files,
             if last.isalpha():
                 pi_surnames.add(last)
 
+    latest_by_project = {}   # project -> newest dated charge
+    for t in transactions:
+        if t["date"] and t["date"] > latest_by_project.get(t["project"], ""):
+            latest_by_project[t["project"]] = t["date"]
+
     projects = []
     all_ids = sorted(set(dash_by_project) | set(meta))
     for pid in all_ids:
@@ -887,16 +906,25 @@ def _analyze(data_dir, root, today_iso, this_month, files_info, dash_files,
                 fa_rate = round(indirect_budget / direct_budget, 4)
                 fa_source = "inferred"
 
+        # what the detail exports cover for this award: the merged report
+        # windows, any gap between them, the newest charge, and where the
+        # next download should start to add the newest charges on top
+        windows = dmeta.get("windows") or set()
+        spans = spn_reports.merge_windows(windows)
+        gaps = spn_reports.window_gaps(windows)
+        bym = monthly.get(pid, {})
+        latest_charge = latest_by_project.get(pid)
+        top_up_from = spn_reports.top_up_from_date(
+            {pid: windows}, [pid], {pid: start} if start else None)
+
         # burn rates averaged over CALENDAR months — quiet months count as
         # zero, so lumpy/quarterly billing isn't overstated. Windows are
         # anchored at the last complete month inside the export's coverage
         # and never reach back before the coverage (or award) start.
-        bym = monthly.get(pid, {})
         recent_burn = None
         avg12 = None
         recent_months = []
         if bym:
-            windows = dmeta.get("windows") or set()
             cov_start = min(w[0] for w in windows)[:7] if windows else min(bym)
             cov_end = max(w[1] for w in windows)[:7] if windows else max(bym)
             floor = max(cov_start, start[:7]) if start else cov_start
@@ -938,11 +966,18 @@ def _analyze(data_dir, root, today_iso, this_month, files_info, dash_files,
             },
             "hasDetail": pid in meta,
             "inDashboard": pid in dash_by_project,
-            # the accounting-date window the detail export was pulled for —
+            # the accounting-date window the detail exports were pulled for —
             # the charge lookup warns when asked about months outside it
-            "detailWindow": ([min(w[0] for w in dmeta["windows"]),
-                              max(w[1] for w in dmeta["windows"])]
-                             if dmeta.get("windows") else None),
+            "detailWindow": [spans[0][0], spans[-1][1]] if spans else None,
+            # stretches inside that window no export covers (a top-up that
+            # started after the previous export ended leaves one)
+            "detailGaps": gaps,
+            "latestCharge": latest_charge,
+            # where a download that adds the newest charges on top of the
+            # exports in hand should start: the first gap, else a few months
+            # before the coverage ends (charges post late), else the award
+            # start when there is no detail history yet
+            "topUpFrom": top_up_from,
         })
 
     # people estimates need the export coverage window length
@@ -971,6 +1006,20 @@ def _analyze(data_dir, root, today_iso, this_month, files_info, dash_files,
 
     flags = compute_flags([p for p in projects if p["inDashboard"]], today_iso)
 
+    # the detail history in hand, over every award: for the page header and
+    # the "just what's new" default of the download link
+    covered = [p for p in projects if p["detailWindow"]]
+    coverage = None
+    if covered:
+        coverage = {
+            "from": min(p["detailWindow"][0] for p in covered),
+            "to": max(p["detailWindow"][1] for p in covered),
+            "latestCharge": max((p["latestCharge"] for p in covered
+                                 if p["latestCharge"]), default=None),
+            "gaps": {p["id"]: p["detailGaps"] for p in covered if p["detailGaps"]},
+            "overlapMonths": spn_reports.OVERLAP_MONTHS,
+        }
+
     source = load_report_source(data_dir, root)
     return {
         "today": today_iso,
@@ -979,6 +1028,7 @@ def _analyze(data_dir, root, today_iso, this_month, files_info, dash_files,
         "projects": projects,
         "people": people,
         "flags": flags,
+        "coverage": coverage,
         # what the "Get fresh data" section needs to offer download links
         "reportSource": {
             "host": source["host"],

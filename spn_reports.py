@@ -32,7 +32,7 @@ import json
 import re
 import sys
 import webbrowser
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -68,6 +68,15 @@ SOURCE_FILE = "report_source.json"
 
 PROJECT_RE = re.compile(r"SPN\d+", re.IGNORECASE)
 BARE_NUMBER_RE = re.compile(r"\d{4,}")
+
+# A top-up export (just the newest charges, to go on top of the exports
+# already in data/) starts this many months before the existing coverage
+# ends. Charges post late — payroll a few days after month end, expense
+# reports weeks after the trip, cost transfers months after the fact — and
+# the report selects on the charge's own date, so a window that started
+# exactly where the last one ended would miss every one of them. Overlap is
+# free: a charge in two exports is counted once (see parse_detail).
+OVERLAP_MONTHS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +224,119 @@ def report_date(value, source=None):
     """Format a date the way the report expects it (mm-dd-yyyy)."""
     src = source or DEFAULT_SOURCE
     return parse_date(value).strftime(src["dateFormat"])
+
+
+# ---------------------------------------------------------------------------
+# coverage: what the detail exports in hand already span, and where a top-up
+# should start
+# ---------------------------------------------------------------------------
+# Every row of a detail export carries the window it was pulled for
+# (PFROMDATE / PTODATE). Merging those windows per project says what history
+# is in hand; the next download then only has to start a little before that
+# ends, instead of back at the award's first day every time.
+
+def merge_windows(windows):
+    """Merge (from, to) ISO-date windows into sorted, non-overlapping spans.
+
+    Windows that touch (one ends the day before the next starts) merge too.
+    Returns [[from, to], ...]; [] for no windows.
+    """
+    spans = sorted((f, t) for f, t in windows or () if f and t and f <= t)
+    merged = []
+    for f, t in spans:
+        if merged and f <= _day_after(merged[-1][1]):
+            merged[-1][1] = max(merged[-1][1], t)
+        else:
+            merged.append([f, t])
+    return merged
+
+
+def window_gaps(windows):
+    """Stretches of time between the merged windows: [[from, to], ...] —
+    dates that no export in hand covers, where a month looks empty even if
+    charges exist. A top-up pulled too late, after the last one ended, is
+    how one appears."""
+    merged = merge_windows(windows)
+    return [[_day_after(a[1]), _day_before(b[0])]
+            for a, b in zip(merged, merged[1:])]
+
+
+def _day_after(iso):
+    return (date.fromisoformat(iso) + timedelta(days=1)).isoformat()
+
+
+def _day_before(iso):
+    return (date.fromisoformat(iso) - timedelta(days=1)).isoformat()
+
+
+def top_up_start(coverage_end, overlap_months=OVERLAP_MONTHS):
+    """Where a top-up window starts: the first of the month, overlap_months
+    before the month the existing coverage ends in."""
+    end = parse_date(coverage_end)
+    months = end.year * 12 + end.month - 1 - overlap_months
+    return date(months // 12, months % 12 + 1, 1).isoformat()
+
+
+def top_up_from_date(windows_by_project, projects=None, starts=None,
+                     overlap_months=OVERLAP_MONTHS):
+    """The from-date that tops up the exports in hand for these projects.
+
+    windows_by_project : {project: iterable of (from, to)} — the detail
+                         windows read from the exports (see scan_detail_windows)
+    projects           : the projects the download is for (default: every
+                         project with a window)
+    starts             : {project: start date} for projects without any
+                         detail history yet — they get their whole history
+
+    Per project: the start of any gap in its coverage, else overlap_months
+    before its coverage ends; a project with no coverage starts at its
+    award start. The earliest of those wins, so one download tops up every
+    project at once. None when nothing is known about any of them.
+    """
+    projects = list(projects) if projects is not None else list(windows_by_project)
+    candidates = []
+    for pid in projects:
+        windows = windows_by_project.get(pid) or ()
+        merged = merge_windows(windows)
+        if merged:
+            gaps = window_gaps(windows)
+            candidates.append(gaps[0][0] if gaps
+                              else top_up_start(merged[-1][1], overlap_months))
+        elif starts and starts.get(pid):
+            candidates.append(parse_date(starts[pid]).isoformat())
+    return min(candidates) if candidates else None
+
+
+def scan_detail_windows(data_dir):
+    """{project: {(from, to), ...}} from every detail export in a folder.
+
+    Reads each export in full (a project's rows can sit anywhere in the
+    cartesian product), so this takes a while on a big file. The dashboard
+    has the parsed exports in memory and never needs this — it is for the
+    CLI's --top-up.
+    """
+    found = {}
+    for path in sorted(Path(data_dir).glob("*.csv")):
+        try:
+            info = find_header(path)
+            if not info or "PROJ_NUMBER" not in info["header"] \
+                    or "PTODATE" not in info["header"]:
+                continue
+            with export_reader(path) as reader:
+                seen = set()
+                for row in reader:
+                    proj = (row.get("PROJ_NUMBER") or "").strip().upper()
+                    try:
+                        key = (proj, parse_date(row.get("PFROMDATE")).isoformat(),
+                               parse_date(row.get("PTODATE")).isoformat())
+                    except ValueError:
+                        continue
+                    if proj and key not in seen:
+                        seen.add(key)
+                        found.setdefault(proj, set()).add(key[1:])
+        except (OSError, ValueError, csv.Error):
+            continue
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -418,14 +540,47 @@ def scan_data_dir(data_dir):
     return projects, min(starts).isoformat() if starts else None
 
 
-def default_from_date(data_dir=None):
+def default_from_date(data_dir=None, top_up=False, projects=None):
     """A sensible start of the window: the oldest project start we can see,
-    else three years back (enough history for burn rates and seasonality)."""
+    else three years back (enough history for burn rates and seasonality).
+
+    top_up=True asks instead for the date that adds the newest charges on
+    top of the detail exports already in data_dir (see top_up_from_date),
+    falling back to the full window when there are none yet.
+    """
+    if data_dir and top_up:
+        windows = scan_detail_windows(data_dir)
+        starts = _project_starts(data_dir)
+        wanted = list(projects) if projects else sorted(set(windows) | set(starts))
+        found = top_up_from_date(windows, wanted, starts)
+        if found:
+            return found
     if data_dir:
         _, earliest = scan_data_dir(data_dir)
         if earliest:
             return earliest
     return date(date.today().year - 3, 1, 1).isoformat()
+
+
+def _project_starts(data_dir):
+    """{project: start date} from the PI Dashboard exports in a folder."""
+    starts = {}
+    for path in sorted(Path(data_dir).glob("*.csv")):
+        try:
+            with export_reader(path) as reader:
+                if "Project Number" not in (reader.fieldnames or []):
+                    continue
+                for row in reader:
+                    for code in normalize_projects([row.get("Project Number") or ""]):
+                        try:
+                            start = parse_date(row.get("Project Start Date")).isoformat()
+                        except ValueError:
+                            continue
+                        if code not in starts or start < starts[code]:
+                            starts[code] = start
+        except (OSError, ValueError, csv.Error):
+            continue
+    return starts
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +597,12 @@ def main(argv=None):
     ap.add_argument("--from", dest="from_date",
                     help="start of the date window (default: oldest project start, "
                          "else three years back)")
+    ap.add_argument("--top-up", action="store_true", dest="top_up",
+                    help="start the window just before the detail exports in "
+                         "--from-data DIR end (overlapping %d months, since "
+                         "charges post late; the dashboard drops the "
+                         "duplicates) instead of at the oldest project start"
+                         % OVERLAP_MONTHS)
     ap.add_argument("--to", dest="to_date",
                     help="end of the date window (default: today)")
     ap.add_argument("--per-project", action="store_true",
@@ -465,7 +626,14 @@ def main(argv=None):
     if not projects:
         ap.error("no project numbers given (pass them as arguments or use --from-data DIR)")
 
-    from_date = args.from_date or default_from_date(args.from_data)
+    if args.top_up and not args.from_data:
+        ap.error("--top-up needs --from-data DIR (the exports to top up)")
+    from_date = args.from_date
+    if not from_date and args.top_up:
+        print("reading the detail exports' date windows…", file=sys.stderr)
+        from_date = default_from_date(args.from_data, top_up=True, projects=projects)
+    if not from_date:
+        from_date = default_from_date(args.from_data)
     try:
         links = report_links(projects, from_date, args.to_date,
                              combined=not args.per_project, source=source)

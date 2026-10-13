@@ -165,8 +165,11 @@ dashboard, open **Get fresh data** (button in the header):
 1. Log into the reporting system in any tab — the link below rides on that
    session.
 2. Tick the awards you want (all of them, by default) and check the date
-   window. It starts at your oldest award and runs through today; wider is
-   better, since burn rates and seasonality come from this history.
+   window. The first time, it starts at your oldest award and runs through
+   today; wider is better, since burn rates and seasonality come from this
+   history. Once a detail export is in, the window defaults to **Just
+   what's new**: a top-up that starts a few months before the exports in
+   hand end and runs through today (see [Topping up](#topping-up) below).
 3. Click **Download detail report CSV**. The reporting system streams the
    CSV straight to your Downloads folder.
 4. The dashboard notices the new file and imports it into `data/` for you
@@ -188,6 +191,7 @@ Same thing from a terminal, without the dashboard:
 ```
 python3 spn_reports.py SPN107048 SPN107049 --from 2025-01-01 --open
 python3 spn_reports.py --from-data data --open      # projects from your exports
+python3 spn_reports.py --from-data data --top-up --open   # just what's new
 python3 spn_reports.py --from-data data --installer install.html   # bookmarklet
 ```
 
@@ -203,11 +207,48 @@ path, layout name, parameter names, date format — is in the defaults at the
 top of `spn_reports.py`, and any of it can be overridden per-machine by
 dropping a `data/report_source.json` like `{"template": "RPT7"}`.
 
+### Topping up
+
+The everyday case, once the history is in: pull just the newest charges
+and drop them on top of what is already there. Nothing needs renaming or
+deleting — every detail export in `data/` is read, and the pieces merge.
+
+* **The window.** Under *Get fresh data*, step 2 offers **Just what's
+  new** (the default once a detail export is in), **Everything**, or a
+  date of your own. *Just what's new* starts **three months before** the
+  exports in hand end, for the ticked awards, and runs through today. The
+  overlap is deliberate: the report selects on each charge's own date, and
+  charges post late — payroll a few days after month end, expense reports
+  weeks after the trip, cost transfers months after the fact — so a window
+  that started exactly where the last one ended would miss them. An award
+  with no detail history yet (a new grant) gets its whole history in the
+  same download, and the note under the window says which award set the
+  start and why.
+* **No double counting.** A charge that is in both the old export and the
+  top-up is counted once: each transaction is identified by its own
+  particulars (project, transaction number, date, type, person, amount to
+  the cent, description), not by which file it came from or how the cell
+  was formatted, so a run that writes `2600` where the last wrote `2600.00`
+  or a slash date instead of a dash one still matches. The same rule is what
+  collapses the report's cartesian product within a single file.
+* **Holes.** If a top-up starts after the previous export ended, the months
+  in between are covered by no export and look empty. The page says so: in
+  the header (*detail history through … (with holes)*), under step 2, and
+  in the charge lookup when the hole falls inside the window asked for.
+  *Just what's new* then starts at the hole, so the next download fills
+  it.
+* **The PI Dashboard export** is a snapshot, not history: re-export it
+  whenever you want fresh balances, and the newest file wins per project.
+* From a terminal, `python3 spn_reports.py --from-data data --top-up`
+  builds the same link (it reads the date windows out of the exports in
+  `data/`, which takes a moment on a big file).
+
 Notes:
 
 * Multiple detail-report files are fine (e.g., one per account, or overlapping date
-  ranges) — they merge and de-duplicate automatically. For PI Dashboard
-  files, the newest file wins per project.
+  ranges, or a top-up on top of a full export) — they merge and
+  de-duplicate automatically. For PI Dashboard files, the newest file wins
+  per project.
 * Re-export both whenever you want fresh numbers (monthly is plenty) and
   click **Reload data** in the page header. Old files can stay in `data/`.
 * Don't worry that the detail export is huge (hundreds of MB) — the reporting
